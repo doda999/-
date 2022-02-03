@@ -29,8 +29,6 @@ class RelationLossComputation(object):
         use_label_smoothing,
         predicate_proportion,
         taxonomy=None,
-        groups=None,
-        is_pcpl=False
     ):
         """
         Arguments:
@@ -46,16 +44,10 @@ class RelationLossComputation(object):
         self.pred_weight = (1.0 / torch.FloatTensor([0.5,] + predicate_proportion)).cuda()
         self.logger = logging.getLogger("maskrcnn_benchmark").getChild("loss")
 
-        self.is_hierarchical = taxonomy!=None
-        self.is_groupbased = groups!=None
-        self.is_pcpl = is_pcpl
+        self.is_cluster = taxonomy!=None
         self.rel_loss = nn.CrossEntropyLoss()
-        if self.is_hierarchical:
+        if self.is_cluster:
             self.rel_loss = TreeLoss(taxonomy)
-        elif self.is_groupbased:
-            self.rel_loss = GroupLoss(groups)
-        elif self.is_pcpl:
-            self.rel_loss = PCPLLoss()
         if self.use_label_smoothing:
             self.criterion_loss = Label_Smoothing_Regression(e=0.01)
         else:
@@ -85,17 +77,14 @@ class RelationLossComputation(object):
         else:
             refine_obj_logits = refine_logits
 
-        if not (self.is_hierarchical or self.is_groupbased):
+        if not self.is_cluster:
           relation_logits = cat(relation_logits, dim=0)
         refine_obj_logits = cat(refine_obj_logits, dim=0)
 
         fg_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0)
         rel_labels = cat(rel_labels, dim=0)
 
-        if self.is_pcpl:
-            loss_relation = self.rel_loss(relation_logits, rel_labels.long(), ind)
-        else:
-            loss_relation = self.rel_loss(relation_logits, rel_labels.long())
+        loss_relation = self.rel_loss(relation_logits, rel_labels.long())
         loss_refine_obj = self.criterion_loss(refine_obj_logits, fg_labels.long())
 
         # The following code is used to calcaulate sampled attribute loss
@@ -192,21 +181,6 @@ class FocalLoss(nn.Module):
         if self.size_average: return loss.mean()
         else: return loss.sum()
 
-class HierarchicalLoss(nn.Module):
-    def __init__(self, taxonomy, lmbda=1):
-        super(HierarchicalLoss, self).__init__()
-        self.treeloss = TreeLoss(taxonomy)
-        self.stsloss = STSLoss(taxonomy)
-        self.lmbda = lmbda
-        self.logger = logging.getLogger("maskrcnn_benchmark").getChild("hierarchicalloss")
-
-    def forward(self, input, target):
-        loss_relation = torch.zeros([1]).cuda()
-        loss_tree = self.treeloss(input, target)
-        loss_sts = self.stsloss(input, target)
-        loss_relation = loss_tree+self.lmbda*loss_sts
-        return loss_relation
-
 class TreeLoss(nn.Module):
     def __init__(self, taxonomy):
         super(TreeLoss, self).__init__()
@@ -232,99 +206,8 @@ class TreeLoss(nn.Module):
             treeloss /= div_n
         return treeloss
 
-# stochastic sampling loss 
-class STSLoss(nn.Module):
-    def __init__(self, taxonomy, dropout_rate=0.2):
-        super(STSLoss, self).__init__()
-        self.dropout_rate = dropout_rate
-        self.RandomDrop = nn.Dropout(self.dropout_rate)
-        self.T = taxonomy
-        self.num_tree = self.T["num_tree"]
-        self.num_node = self.T["num_node"]
-        self.children = self.T["children"]
-        self.children_tree_idx = torch.from_numpy(self.T["children_tree_index"])
-        self.parent_tree_idx = self.T["parent_tree_index"]
-        self.is_ancestor_mat = torch.from_numpy(self.T["is_ancestor_mat"]).float().cuda()
-        self.logger = logging.getLogger("maskrcnn_benchmark").getChild("stsloss")
 
-    def forward(self, input, target):
-        logits = cat(input[0], dim=0)
-        batch_size = logits.shape[0]
-        gate = torch.ones(batch_size, self.num_tree).cuda()
-        gate = self.RandomDrop(gate)*(1-self.dropout_rate)
-        gate[:,0] = 1 # don't drop root
-
-        outs = []
-        masks = []
-        # which leaf nodes that each node under root has an influence on
-        cw = self.is_ancestor_mat[torch.from_numpy(self.children[0])]
-        outs.append(torch.matmul(logits, cw))
-        for i in range(1, self.num_tree):
-            logits = cat(input[i], dim=0)
-            par_tree = i
-            cw = self.is_ancestor_mat[torch.from_numpy(self.children[i])]
-            # if any of the ancestors is dropped out, the node is ignored out as well
-            cond_gate = torch.ones([batch_size, 1]).cuda()
-            while par_tree != 0:
-                cond_gate = torch.mul(cond_gate, gate[:, par_tree].view(-1,1))
-                par_tree = self.parent_tree_idx[par_tree]
-            outs.append(torch.matmul(logits, cw)*cond_gate)
-            mask = torch.zeros([batch_size, self.num_node]).cuda()
-            mask[:, torch.from_numpy(self.children[i])] = 1
-            masks.append(mask*cond_gate)
-        output = torch.clamp(torch.sum(torch.stack(outs), 0), 1e-17, 1)
-        out_mask = torch.sum(torch.stack(masks), 0)
-        out_mask[:, torch.from_numpy(self.children[0])] = 1
-        out_mask = out_mask[:, (self.children_tree_idx==-1).nonzero().flatten()]
-        sfmx_base = torch.sum(torch.exp(output)*out_mask, 1)
-        gt_z = torch.gather(output, 1, target.view(-1, 1))
-        stsloss = torch.mean(-gt_z + torch.log(sfmx_base.view(-1,1)))
-        return stsloss
-
-# completely same as TreeLoss
-class GroupLoss(nn.Module):
-    def __init__(self, groups):
-        super(GroupLoss, self).__init__()
-        self.G = groups
-        self.global2children = torch.from_numpy(self.G["global_to_children"]).cuda().to(torch.long)
-        self.num_groups = self.G["num_groups"]
-
-        self.celoss = FocalLoss(gamma=2, ignore_index=-1)
-        # self.celoss = nn.CrossEntropyLoss(ignore_index=-1)
-        self.logger = logging.getLogger("maskrcnn_benchmark").getChild("grouploss")
-    def forward(self, input, target):
-        grouploss = torch.zeros([1]).cuda()
-        div_n = 0
-        for i in range(self.num_groups):
-            logits = cat(input[i], dim=0)
-             ####### CROSS ENTROPY LOSS FOR EACH TREE ########
-            target_ch = self.global2children[i][target]
-            if (target_ch>=0).sum() > 0:
-                div_n += 1
-                grouploss += self.celoss(logits, target_ch)
-         # normalization per class
-        if div_n>0:
-            grouploss /= div_n
-        return grouploss
-
-# consider class independence 
-class PCPLLoss(nn.Module):
-    def __init__(self, size_average=True):
-        super(PCPLLoss, self).__init__()
-        self.celoss = nn.CrossEntropyLoss()
-        self.size_average = size_average
-        self.logger = logging.getLogger("maskrcnn_benchmark").getChild("pcplloss")
-    def forward(self, input, target, ind):
-        # relation class present at the batch
-        gt_cls = torch.unique(target)
-        weight = ind/torch.sum(ind[gt_cls])
-        logpt = F.log_softmax(input)
-        logpt = logpt.index_select(-1, target).diag()
-        loss = -weight[target]*logpt.view(-1)
-        if self.size_average: return loss.mean()
-        else: return loss.sum()
-
-def make_roi_relation_loss_evaluator(cfg, taxonomy=None, groups=None, is_pcpl=False):
+def make_roi_relation_loss_evaluator(cfg, taxonomy=None):
     loss_evaluator = RelationLossComputation(
         cfg.MODEL.ATTRIBUTE_ON,
         cfg.MODEL.ROI_ATTRIBUTE_HEAD.NUM_ATTRIBUTES,
@@ -334,8 +217,6 @@ def make_roi_relation_loss_evaluator(cfg, taxonomy=None, groups=None, is_pcpl=Fa
         cfg.MODEL.ROI_RELATION_HEAD.LABEL_SMOOTHING_LOSS,
         cfg.MODEL.ROI_RELATION_HEAD.REL_PROP,
         taxonomy=taxonomy,
-        groups=groups,
-        is_pcpl=is_pcpl
     )
 
     return loss_evaluator

@@ -1,6 +1,0 @@
-{"predicate_to_idx": {"and": 5, "says": 39, "belonging to": 9, "over": 33, "parked on": 35, "growing on": 18, "standing on": 41, "made of": 27, "attached to": 7, "at": 6, "in": 22, "hanging from": 19, "wears": 49, "in front of": 23, "from": 17, "for": 16, "watching": 47, "lying on": 26, "to": 42, "behind": 8, "flying in": 15, "looking at": 25, "on back of": 32, "holding": 21, "between": 10, "laying on": 24, "riding": 38, "has": 20, "across": 2, "wearing": 48, "walking on": 46, "eating": 14, "above": 1, "part of": 36, "walking in": 45, "sitting on": 40, "under": 43, "covered in": 12, "carrying": 11, "using": 44, "along": 4, "with": 50, "on": 31, "covering": 13, "of": 30, "against": 3, "playing": 37, "near": 29, "painted on": 34, "mounted on": 28},
-"children":{"root":["parent1", "parent2"],
-    "parent1":["against", "along", "at", "behind", "carrying", "covered in", "covering", "eating", "for", "in", "in front of", "laying on", "lying on", "made of", "mounted on", "near", "on back of", "over", "part of", "playing", "says", "sitting on", "standing on", "to", "under", "wears", "with"],
-    "parent2":["above", "across", "and", "attached to", "belonging to", "flying in", "from", "growing on", "hanging from", "has", "holding", "looking at", "of", "on", "painted on", "parked on", "riding", "using", "walking in", "walking on", "watching", "wearing"]
-}
-}

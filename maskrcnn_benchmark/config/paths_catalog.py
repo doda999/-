@@ -6,7 +6,7 @@ import copy
 
 
 class DatasetCatalog(object):
-    DATA_DIR = "/home/ubuntu/related_work/scene-graph-benchmark/Scene-Graph-Benchmark.pytorch/datasets"
+    DATA_DIR = "/home/miskai/デスクトップ/related-work/scene-graph-benchmark/datasets"
     DATASETS = {
         "coco_2017_train": {
             "img_dir": "coco/train2017",

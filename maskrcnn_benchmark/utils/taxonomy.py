@@ -47,20 +47,17 @@ def build_taxonomy(config):
     idx2pred = info["idx_to_predicate"]
 
     # from_ckpt = False
-    if config.MODEL.ROI_RELATION_HEAD.PREDICTOR == "HierarchicalPredictor":
-        json_path = config.MODEL.ROI_RELATION_HEAD.HIERARCHICAL.TAXONOMY_PATH 
-    elif config.MODEL.ROI_RELATION_HEAD.PREDICTOR == "HierarchicalKTPredictor":
-        # pretrained = torch.load(config.MODEL.PRETRAINED_DETECTOR_CKPT, map_location=torch.device("cpu"))
-        # class_feat_param = "roi_heads.relation.predictor.class_features"
-        # if class_feat_param in pretrained["model"].keys():
-        #     from_ckpt = True
-        #     class_features = pretrained["model"][class_feat_param][1:] # remove background 0
-        #     labels = np.array([idx2pred[str(l)] for l in range(1,num_rel_cls)], dtype=str)
-        #     num_cluster = 2
-        #     json_path = os.path.join(config.OUTPUT_DIR, "cluster.json")
-        # else:
-        #     json_path = config.MODEL.ROI_RELATION_HEAD.HIERARCHICALKT.TAXONOMY_PATH 
-        json_path = config.MODEL.ROI_RELATION_HEAD.HIERARCHICALKT.TAXONOMY_PATH
+    # pretrained = torch.load(config.MODEL.PRETRAINED_DETECTOR_CKPT, map_location=torch.device("cpu"))
+    # class_feat_param = "roi_heads.relation.predictor.class_features"
+    # if class_feat_param in pretrained["model"].keys():
+    #     from_ckpt = True
+    #     class_features = pretrained["model"][class_feat_param][1:] # remove background 0
+    #     labels = np.array([idx2pred[str(l)] for l in range(1,num_rel_cls)], dtype=str)
+    #     num_cluster = 2
+    #     json_path = os.path.join(config.OUTPUT_DIR, "cluster.json")
+    # else:
+    #     json_path = config.MODEL.ROI_RELATION_HEAD.HIERARCHICALKT.TAXONOMY_PATH 
+    json_path = config.MODEL.ROI_RELATION_HEAD.PSKT.TAXONOMY_PATH
 
     p = pathlib.PurePath(json_path)
     npy_path = os.path.join(p.parent, p.stem+".npy")

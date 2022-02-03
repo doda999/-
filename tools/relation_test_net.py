@@ -66,7 +66,6 @@ def main():
 
     model = build_detection_model(cfg)
     model.to(cfg.MODEL.DEVICE)
-    # classifier_modules = (model.roi_heads.relation.predictor.rel_compress, model.roi_heads.relation.predictor.freq_compress)
 
 
     # Initialize mixed-precision if necessary
@@ -76,8 +75,6 @@ def main():
     output_dir = cfg.OUTPUT_DIR
     checkpointer = DetectronCheckpointer(cfg, model, save_dir=output_dir)
     _ = checkpointer.load(cfg.MODEL.WEIGHT)
-    # discard_bias(classifier_modules)
-    # tau_normalize(classifier_modules, 1)
 
     iou_types = ("bbox",)
     if cfg.MODEL.MASK_ON:
@@ -111,23 +108,6 @@ def main():
         )
         synchronize()
 
-def tau_normalize(modules, tau=1):
-    """
-    Params:
-        modules: nn.ModuleList()
-    """
-    for module in modules:
-        with torch.no_grad():
-            for i, p in enumerate(module):
-                norm = torch.norm(p.weight, 2, 1).cuda()
-                for j in range(p.weight.size(0)):
-                    p.weight[j] /= torch.pow(norm[j],tau)
-
-def discard_bias(modules):
-    for module in modules:
-        with torch.no_grad():
-            for i, p in enumerate(module):
-                p.bias = torch.nn.Parameter(torch.tensor([0.0 for _ in range(p.weight.size(0))]).cuda())
 
 
 if __name__ == "__main__":

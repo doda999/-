@@ -60,17 +60,12 @@ def train(cfg, local_rank, distributed, logger):
     load_mapping = {"roi_heads.relation.box_feature_extractor" : "roi_heads.box.feature_extractor",
                     "roi_heads.relation.union_feature_extractor.feature_extractor" : "roi_heads.box.feature_extractor",}
     if (cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR == "KnowledgeTransferPredictor" and cfg.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.KNOWLEDGE_TRANSFER == True) or \
-        (cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR == "HierarchicalKTPredictor"):
+        (cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR == "PSKTPredictor"):
+        # fix pretrained baseline
         eval_modules = (model.rpn, model.backbone, model.roi_heads.box, model.roi_heads.relation.union_feature_extractor, model.roi_heads.relation.box_feature_extractor, model.roi_heads.relation.predictor.context_layer, model.roi_heads.relation.predictor.post_emb, model.roi_heads.relation.predictor.post_cat, model.roi_heads.relation.predictor.freq_bias.obj_baseline)
         load_mapping = {}
-        fast_heads = ["roi_heads.relation.predictor.class_features"]
-    else:
-        fast_heads = []
-
-    if cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR == "HierarchicalPredictor":
-        check_keys = ["roi_heads.relation.predictor.rel_compress","roi_heads.relation.predictor.rel_post", "roi_heads.relation.predictor.freq_compress" ]
-    else:
-        check_keys = []
+    # layers with higher learning rate
+    fast_heads = []
     
     if cfg.MODEL.ATTRIBUTE_ON:
         load_mapping["roi_heads.relation.att_feature_extractor"] = "roi_heads.attribute.feature_extractor"
@@ -115,7 +110,7 @@ def train(cfg, local_rank, distributed, logger):
         arguments.update(extra_checkpoint_data)
     else:
         # load_mapping is only used when we init current model from detection model.
-        checkpointer.load(cfg.MODEL.PRETRAINED_DETECTOR_CKPT, with_optim=False, load_mapping=load_mapping, check_keys=check_keys)
+        checkpointer.load(cfg.MODEL.PRETRAINED_DETECTOR_CKPT, with_optim=False, load_mapping=load_mapping)
     debug_print(logger, 'end load checkpointer')
     train_data_loader = make_data_loader(
         cfg,

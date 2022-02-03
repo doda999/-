@@ -7,7 +7,7 @@ import torch
 from maskrcnn_benchmark.utils.imports import import_file
 
 
-def align_and_update_state_dicts(model_state_dict, loaded_state_dict, load_mapping, check_keys):
+def align_and_update_state_dicts(model_state_dict, loaded_state_dict, load_mapping):
     """
     Strategy: suppose that the models that we will create will have prefixes appended
     to each of its keys, for example due to an extra level of nesting that the original
@@ -46,13 +46,6 @@ def align_and_update_state_dicts(model_state_dict, loaded_state_dict, load_mappi
     # remove indices that correspond to no-match
     idxs[max_match_size == 0] = -1
 
-    # size comparison between modules with the same name to avoid size mismatch error
-    for i, key in enumerate(mapped_current_keys):
-        for check in check_keys:
-            if key.startswith(check):
-                if idxs[i]!=-1 and (model_state_dict[current_keys[i]].size()!=loaded_state_dict[key].size()):
-                    idxs[i] = -1
-
     # used for logging
     max_size = max([len(key) for key in current_keys]) if current_keys else 1
     max_size_loaded = max([len(key) for key in loaded_keys]) if loaded_keys else 1
@@ -89,13 +82,13 @@ def strip_prefix_if_present(state_dict, prefix):
     return stripped_state_dict
 
 
-def load_state_dict(model, loaded_state_dict, load_mapping, check_keys):
+def load_state_dict(model, loaded_state_dict, load_mapping):
     model_state_dict = model.state_dict()
     # if the state_dict comes from a model that was wrapped in a
     # DataParallel or DistributedDataParallel during serialization,
     # remove the "module" prefix before performing the matching
     loaded_state_dict = strip_prefix_if_present(loaded_state_dict, prefix="module.")
-    align_and_update_state_dicts(model_state_dict, loaded_state_dict, load_mapping, check_keys)
+    align_and_update_state_dicts(model_state_dict, loaded_state_dict, load_mapping)
 
     # use strict loading
     model.load_state_dict(model_state_dict)

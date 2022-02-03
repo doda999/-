@@ -34,21 +34,14 @@ class ROIRelationHead(torch.nn.Module):
             self.box_feature_extractor = make_roi_box_feature_extractor(cfg, in_channels)
             feat_dim = self.box_feature_extractor.out_channels
         taxonomy = None
-        groups = None
-        self.is_pcpl = False
-        if self.predictor.startswith("Hierarchical"):
+        if self.predictor=="PSKTPredictor":
           taxonomy = build_taxonomy(cfg)
           assert taxonomy is not None
-        elif self.predictor == "MiniGroupBasedPredictor":
-            groups = set_groups(cfg)
-            assert groups is not None
-        elif self.predictor == "PCPLPredictor":
-            self.is_pcpl = True
-        self.predictor = make_roi_relation_predictor(cfg, feat_dim, taxonomy=taxonomy, groups=groups)
-        self.post_processor = make_roi_relation_post_processor(cfg, taxonomy=taxonomy, groups=groups)
-        self.loss_evaluator = make_roi_relation_loss_evaluator(cfg, taxonomy=taxonomy, groups=groups, is_pcpl=self.is_pcpl)
+        self.predictor = make_roi_relation_predictor(cfg, feat_dim, taxonomy=taxonomy)
+        self.post_processor = make_roi_relation_post_processor(cfg, taxonomy=taxonomy)
+        self.loss_evaluator = make_roi_relation_loss_evaluator(cfg, taxonomy=taxonomy)
         self.samp_processor = make_roi_relation_samp_processor(cfg)
-        self.vis_record = cfg.MODEL.ROI_RELATION_HEAD.HIERARCHICAL.VIS_RECORD or cfg.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.VIS_RECORD
+        self.vis_record = cfg.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.VIS_RECORD
 
         # parameters
         self.use_union_box = self.cfg.MODEL.ROI_RELATION_HEAD.PREDICT_USE_VISION
@@ -92,10 +85,7 @@ class ROIRelationHead(torch.nn.Module):
         
         # final classifier that converts the features into predictions
         # should corresponding to all the functions and layers after the self.context class
-        if self.training and self.is_pcpl:
-            refine_logits, relation_logits, add_losses, ind = self.predictor(proposals, rel_pair_idxs, rel_labels, rel_binarys, roi_features, union_features, logger)
-        else:
-            refine_logits, relation_logits, add_losses = self.predictor(proposals, rel_pair_idxs, rel_labels, rel_binarys, roi_features, union_features, logger)
+        refine_logits, relation_logits, add_losses = self.predictor(proposals, rel_pair_idxs, rel_labels, rel_binarys, roi_features, union_features, logger)
 
         # just for feature record
         if self.vis_record:
@@ -106,10 +96,7 @@ class ROIRelationHead(torch.nn.Module):
             result = self.post_processor((relation_logits, refine_logits), rel_pair_idxs, proposals)
             return roi_features, result, {}
 
-        if self.training and self.is_pcpl:
-            loss_relation, loss_refine = self.loss_evaluator(proposals, rel_labels, relation_logits, refine_logits, ind)
-        else:
-            loss_relation, loss_refine = self.loss_evaluator(proposals, rel_labels, relation_logits, refine_logits)
+        loss_relation, loss_refine = self.loss_evaluator(proposals, rel_labels, relation_logits, refine_logits)
 
         if self.cfg.MODEL.ATTRIBUTE_ON and isinstance(loss_refine, (list, tuple)):
             output_losses = dict(loss_rel=loss_relation, loss_refine_obj=loss_refine[0], loss_refine_att=loss_refine[1])
