@@ -55,8 +55,8 @@ MODEL:
     ATTRIBUTE_BGFG_SAMPLE: True    
     ATTRIBUTE_BGFG_RATIO: 3        
   ROI_RELATION_HEAD:
-    USE_GT_BOX: True
-    USE_GT_OBJECT_LABEL: True
+    USE_GT_BOX: False
+    USE_GT_OBJECT_LABEL: False
     REQUIRE_BOX_OVERLAP: False              # for sgdet, during training, only train pairs with overlap
     ADD_GTBOX_TO_PROPOSAL_IN_TRAIN: True    # for sgdet only, in case some gt boxes are missing
     NUM_CLASSES: 51                 # 51 for VG, 201 for GQA (not contain "to the left of" & "to the right of")
@@ -74,7 +74,8 @@ MODEL:
     # PREDICTOR: "CausalAnalysisPredictor"
     # PREDICTOR: "HierarchicalCausalPredictor"
     # PREDICTOR: "KnowledgeTransferPredictor"
-    PREDICTOR: "PSKTPredictor"
+    # PREDICTOR: "PSKTPredictor"
+    PREDICTOR: "PSKTAllPredictor"
     ################# Parameters for Motif Predictor ##################
     CONTEXT_OBJ_LAYER: 1
     CONTEXT_REL_LAYER: 1
@@ -100,10 +101,18 @@ MODEL:
     PSKT:
       CONTEXT_LAYER: 'motifs'         # candicates: motifs, vctree, vtranse
       FEAT_MODE: 'concat'           # candidates: concat, sum, basic, vis_concat, ctx_concat
-      TAXONOMY_PATH: "/home/miskai/デスクトップ/related-work/scene-graph-benchmark/SGG-TD2/datasets/vg/cat-base-2cluster.json"
+      TAXONOMY_PATH: "datasets/vg/sgdet_clusters/motifs/2cluster.json"
       CALIBRATION_ALPHA: 10.0
       KNOWLEDGE_TRANSFER: True
       FEATURE_LOSS: "margin"   
+    ############# Parameters for Predicate Similarity used Knowledge Transfer(for all labels) Predictor ##############
+    PSKTALL:
+      CONTEXT_LAYER: 'motifs'         # candicates: motifs, vctree, vtranse
+      FEAT_MODE: 'concat'           # candidates: concat, sum, basic, vis_concat, ctx_concat
+      TAXONOMY_PATH: "datasets/vg/sgdet_clusters/motifs/2cluster.json"
+      CALIBRATION_ALPHA: 10.0
+      KNOWLEDGE_TRANSFER: True
+      FEATURE_LOSS: "margin"  
     ############### Parameters for Transformer Predictor ##############
     TRANSFORMER:
       DROPOUT_RATE: 0.1

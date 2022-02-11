@@ -57,7 +57,10 @@ def build_taxonomy(config):
     #     json_path = os.path.join(config.OUTPUT_DIR, "cluster.json")
     # else:
     #     json_path = config.MODEL.ROI_RELATION_HEAD.HIERARCHICALKT.TAXONOMY_PATH 
-    json_path = config.MODEL.ROI_RELATION_HEAD.PSKT.TAXONOMY_PATH
+    if config.MODEL.ROI_RELATION_HEAD.PREDICTOR == "PSKTPredictor":
+        json_path = config.MODEL.ROI_RELATION_HEAD.PSKT.TAXONOMY_PATH
+    elif config.MODEL.ROI_RELATION_HEAD.PREDICTOR == "PSKTAllPredictor":
+        json_path = config.MODEL.ROI_RELATION_HEAD.PSKTALL.TAXONOMY_PATH
 
     p = pathlib.PurePath(json_path)
     npy_path = os.path.join(p.parent, p.stem+".npy")

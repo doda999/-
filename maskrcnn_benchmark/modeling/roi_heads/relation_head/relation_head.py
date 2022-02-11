@@ -34,7 +34,7 @@ class ROIRelationHead(torch.nn.Module):
             self.box_feature_extractor = make_roi_box_feature_extractor(cfg, in_channels)
             feat_dim = self.box_feature_extractor.out_channels
         taxonomy = None
-        if self.predictor=="PSKTPredictor":
+        if self.predictor=="PSKTPredictor" or self.predictor=="PSKTAllPredictor":
           taxonomy = build_taxonomy(cfg)
           assert taxonomy is not None
         self.predictor = make_roi_relation_predictor(cfg, feat_dim, taxonomy=taxonomy)
