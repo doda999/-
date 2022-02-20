@@ -1471,6 +1471,278 @@ class PSKTAllPredictor(nn.Module):
             
         return obj_dist_list, final_dists_list, add_losses
 
+# rootだけ全ラベルKTして、他の分類器は類似ラベルKT
+@registry.ROI_RELATION_PREDICTOR.register("PSKTRootAllPredictor")
+class PSKTRootAllPredictor(nn.Module):
+    def __init__(self, config, in_channels, taxonomy):
+        super(PSKTRootAllPredictor, self).__init__()
+        self.num_obj_cls = config.MODEL.ROI_BOX_HEAD.NUM_CLASSES
+        self.num_rel_cls = config.MODEL.ROI_RELATION_HEAD.NUM_CLASSES
+        self.feat_mode = config.MODEL.ROI_RELATION_HEAD.PSKTROOTALL.FEAT_MODE 
+        self.use_bias = config.MODEL.ROI_RELATION_HEAD.PREDICT_USE_BIAS
+        self.feat_path = config.MODEL.ROI_RELATION_HEAD.PSKTROOTALL.PRETRAINED_FEATURE_PATH
+        self.feature_loss = config.MODEL.ROI_RELATION_HEAD.PSKTROOTALL.FEATURE_LOSS
+        self.logger = logging.getLogger("maskrcnn_benchmark").getChild("predictor")
+
+        if config.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
+            if config.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL:
+                mode = 'predcls'
+            else:
+                mode = 'sgcls'
+        else:
+            mode = 'sgdet'
+
+        assert in_channels is not None
+
+        # set taxonomy
+        self.T = taxonomy
+        self.num_tree = self.T["num_tree"]
+        self.global2children = torch.from_numpy(self.T["global_to_children"]).cuda()
+        self.is_ancestor_mat = torch.from_numpy(self.T["is_ancestor_mat"].astype(config.DTYPE)).cuda()
+        self.num_children = self.T["num_children"]
+        self.children_idxs = self.T["children"]
+        self.children_tree_index = self.T["children_tree_index"]
+
+        # # ignore "on"
+        # self.is_ancestor_mat[:,31] = 0
+
+        assert in_channels is not None 
+
+        # load class dict
+        statistics = get_dataset_statistics(config)
+        obj_classes, rel_classes = statistics["obj_classes"], statistics['rel_classes']
+        assert self.num_obj_cls == len(obj_classes)
+        assert self.num_rel_cls == len(rel_classes)
+        # init encoding
+        if config.MODEL.ROI_RELATION_HEAD.PSKTROOTALL.CONTEXT_LAYER == "motifs":
+            self.context_layer = LSTMContext(config, obj_classes, rel_classes, in_channels)
+        elif config.MODEL.ROI_RELATION_HEAD.PSKTROOTALL.CONTEXT_LAYER == "vctree":
+            self.context_layer = VCTreeLSTMContext(config, obj_classes, rel_classes, statistics, in_channels)
+        else:
+            print('ERROR: Invalid Context Layer')
+
+        # pos decoding
+        self.hidden_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
+        self.pooling_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM
+
+        self.edge_dim = self.hidden_dim
+        self.post_emb = nn.Linear(self.hidden_dim, self.hidden_dim * 2)
+        self.post_cat = nn.Sequential(*[nn.Linear(self.hidden_dim * 2, self.pooling_dim),
+                                        nn.ReLU(inplace=True),])
+        if self.feat_mode == "concat":
+            assert self.use_bias
+            self.feat_dim = self.pooling_dim+self.num_rel_cls
+        elif self.feat_mode == "basic":
+            self.feat_dim = self.pooling_dim
+        else:
+            raise ValueError(f"{self.feat_mode} is invalid feature mode. Please select from 'concat' or 'basic'")
+
+        self.first_compress = nn.ModuleList(nn.Linear(self.feat_dim, self.num_rel_cls) if i==0 else nn.Linear(self.feat_dim, num) for i, num in enumerate(self.num_children))
+
+        if self.pooling_dim != config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM:
+            self.union_single_not_match = True
+            self.up_dim = nn.Linear(config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM, self.pooling_dim)
+        else:
+            self.union_single_not_match = False
+
+        self.class_features = nn.Parameter(torch.zeros(self.num_rel_cls, self.feat_dim).to(torch.float), requires_grad=False)
+        if self.feat_path:
+            self.class_features = nn.Parameter(torch.from_numpy(np.load(self.feat_path, allow_pickle=True).item()["avg_feature"]).to(torch.float).cuda(), requires_grad=False)
+        if self.feature_loss != "none":
+            assert self.feature_loss=="mse" or self.feature_loss=="margin", "Please select 'mse' or 'margin' or 'none' for feature loss"
+            self.class_features.requires_grad = True
+            self.mseloss = nn.MSELoss()
+            if self.feature_loss == "margin":
+                self.margin = 40.0
+                self.weight = 0.1 if mode == "sgdet" else 1
+
+        self.final_compress = nn.ModuleList(nn.Linear(self.feat_dim, num) for num in self.num_children)
+        #for calibration
+        self.alpha = config.MODEL.ROI_RELATION_HEAD.PSKTROOTALL.CALIBRATION_ALPHA
+
+
+        # for object class embedding 
+        if self.use_bias:
+            self.freq_bias = FrequencyBias(config, statistics)
+            if "basic" in self.feat_mode:
+                self.freq_compress = nn.ModuleList(nn.Linear(self.num_rel_cls, num) for num in self.num_children)
+        
+        self.layer_initialize()
+
+
+    def layer_initialize(self):
+        layer_init(self.post_emb, 10.0 * (1.0 / self.hidden_dim) ** 0.5, mode="normal")
+        layer_init(self.post_cat[0], mode="kaiming")
+        if self.union_single_not_match:
+            layer_init(self.up_dim, mode="xavier")
+        for i in range(self.num_tree):
+            layer_init(self.first_compress[i], mode="xavier")
+            layer_init(self.final_compress[i], mode="xavier")
+            if "basic" in self.feat_mode:
+                layer_init(self.freq_compress[i], mode="xavier")
+            
+
+    def pair_feature_generate(self, roi_features, proposals, rel_pair_idxs, num_objs, obj_boxs, logger, ctx_average=False):
+        # encode context infomation
+        obj_dists, obj_preds, edge_ctx, binary_preds = self.context_layer(roi_features, proposals, rel_pair_idxs, logger, ctx_average=ctx_average)
+        obj_dist_prob = F.softmax(obj_dists, dim=-1)
+
+        # post decode
+        edge_rep = self.post_emb(edge_ctx)
+        edge_rep = edge_rep.view(edge_rep.size(0), 2, self.edge_dim)
+        head_rep = edge_rep[:, 0].contiguous().view(-1, self.edge_dim)
+        tail_rep = edge_rep[:, 1].contiguous().view(-1, self.edge_dim)
+        # split
+        head_reps = head_rep.split(num_objs, dim=0)
+        tail_reps = tail_rep.split(num_objs, dim=0)
+        obj_preds = obj_preds.split(num_objs, dim=0)
+        obj_prob_list = obj_dist_prob.split(num_objs, dim=0)
+        obj_dist_list = obj_dists.split(num_objs, dim=0)
+        ctx_reps = []
+        pair_preds = []
+        pair_obj_probs = []
+        pair_bboxs_info = []
+        for pair_idx, head_rep, tail_rep, obj_pred, obj_box, obj_prob in zip(rel_pair_idxs, head_reps, tail_reps, obj_preds, obj_boxs, obj_prob_list):
+            ctx_reps.append( torch.cat((head_rep[pair_idx[:,0]], tail_rep[pair_idx[:,1]]), dim=-1) )
+            pair_preds.append( torch.stack((obj_pred[pair_idx[:,0]], obj_pred[pair_idx[:,1]]), dim=1) )
+            pair_obj_probs.append( torch.stack((obj_prob[pair_idx[:,0]], obj_prob[pair_idx[:,1]]), dim=2) )
+            pair_bboxs_info.append( get_box_pair_info(obj_box[pair_idx[:,0]], obj_box[pair_idx[:,1]]) )
+        pair_obj_probs = cat(pair_obj_probs, dim=0)
+        pair_bbox = cat(pair_bboxs_info, dim=0)
+        pair_pred = cat(pair_preds, dim=0)
+        ctx_rep = cat(ctx_reps, dim=0)
+        post_ctx_rep = self.post_cat(ctx_rep)
+
+        return post_ctx_rep, pair_pred, pair_bbox, pair_obj_probs, binary_preds, obj_dist_prob, edge_rep, obj_dist_list
+    
+    
+    def knowledge_transfer(self, feature, tree_index):
+        first_dist = self.first_compress[tree_index](feature)
+        p = F.softmax(first_dist, -1)
+        max_score, max_idx = p.max(dim=1)
+        #### knowledge calculation ####
+        if tree_index == 0:
+            parent_feature = self.class_features.detach()
+        else:
+            parent_feature = torch.matmul(self.is_ancestor_mat[self.children_idxs[tree_index]], self.class_features.detach())
+            div_n = torch.sum(self.is_ancestor_mat[self.children_idxs[tree_index]], dim=1)
+            parent_feature = parent_feature/div_n.view(-1,1)
+        knowledge = torch.matmul(p, parent_feature)
+        #### refine feature ####
+        # attention selector -----------------------------------------
+        attention = torch.clamp(torch.tanh(feature+knowledge), min=0)
+        refined_feature = feature + attention*knowledge
+        #-------------------------------------------------------------
+
+        #### feature calibration ####
+        refined_feature = self.alpha*torch.mul(max_score.view(-1,1), refined_feature)
+        final_dist = self.final_compress[tree_index](refined_feature)
+        return first_dist, final_dist
+
+
+    def forward(self, proposals, rel_pair_idxs, rel_labels, rel_binarys, roi_features, union_features, logger=False):
+        num_rels = [r.shape[0] for r in rel_pair_idxs]
+        num_objs = [len(b) for b in proposals]
+        obj_boxs = [get_box_info(p.bbox, need_norm=True, proposal=p) for p in proposals]
+
+        assert len(num_rels) == len(num_objs)
+
+        post_ctx_rep, pair_pred, pair_bbox, pair_obj_probs, binary_preds, obj_dist_prob, edge_rep, obj_dist_list = self.pair_feature_generate(roi_features, proposals, rel_pair_idxs, num_objs, obj_boxs, logger)
+
+        assert union_features != None 
+
+        # object classes embedding
+        if self.use_bias:
+            freq_emb = self.freq_bias.index_with_labels(pair_pred.long())
+
+        if self.union_single_not_match:
+            union_features = self.up_dim(union_features)
+        if self.feat_mode == "concat":
+            feature = torch.cat([post_ctx_rep+union_features, freq_emb], dim=-1)
+        elif self.feat_mode == "basic":
+            feature = post_ctx_rep * union_features
+
+        first_dists = []
+        final_dists = []
+
+        for i in range(self.num_tree):
+            first_dist, final_dist = self.knowledge_transfer(feature, i)
+            first_dists.append(first_dist)
+            if ("basic" in self.feat_mode) and self.use_bias and i!=0:
+                # # freq info selector 
+                final_dist = final_dist + self.freq_compress[i](freq_emb)
+                # freq info extraction 
+                # --- if you apply it to root ----
+                # anc_mat = self.is_ancestor_mat[self.children_idxs[i]]
+                # anc_mat /= torch.sum(anc_mat, dim=1).view(-1,1)
+                # final_dist = final_dist + torch.matmul(freq_emb, torch.t(anc_mat))
+                # --- else ----
+                # final_dist = final_dist + torch.matmul(freq_emb, torch.t(self.is_ancestor_mat[self.children_idxs[i]])) #階層分類だと平均とる必要あり, クラスター選択タイプならいらない
+            final_dists.append(final_dist)
+
+        final_dists_list = [(final_dists[i].split(num_rels, dim=0)) for i in range(self.num_tree)]
+
+        # TODO code for vstree binary loss
+        add_losses = {}
+        if self.training:
+            rel_labels = cat(rel_labels, dim=0)
+            feature_detached = feature.detach()
+            if self.feature_loss == "mse":
+                add_losses["feature"] = self.mseloss(self.class_features[rel_labels], feature_detached)
+            
+            elif self.feature_loss == "margin":
+                batch_size = feature_detached.size(0)
+                # attract loss
+                counts = feature_detached.new_ones(self.num_rel_cls)
+                counts = counts.scatter_add_(0, rel_labels, counts.new_ones(batch_size))
+                class_feature_batch = self.class_features.index_select(0,rel_labels).to(feature_detached.dtype)
+                diff = (feature_detached - class_feature_batch).pow(2)/2
+                div = counts.index_select(0, rel_labels)
+                diff /= div.view(-1,1)
+                add_losses["feature attract loss"] = self.weight*diff.sum()/batch_size
+                # repel loss
+                dist_mat = torch.cdist(feature_detached, self.class_features.to(feature_detached.dtype))
+                classes = torch.arange(self.num_rel_cls).long().cuda()
+                labels_expand = rel_labels.unsqueeze(1).expand(batch_size, self.num_rel_cls)
+                mask = labels_expand.ne(classes.expand(batch_size, self.num_rel_cls)).int()
+                distmat_neg = torch.mul(dist_mat, mask)
+                # original attract:repel = 1:0.01
+                add_losses["feature repel loss"] = self.weight*0.01*torch.clamp(self.margin - distmat_neg.sum()/(batch_size*self.num_rel_cls), 0.0, 1e6)
+            
+            elif self.feature_loss=="none":
+                # moving average
+                with torch.no_grad():
+                    for i in range(self.num_rel_cls):
+                        if len(feature_detached[rel_labels==i]):
+                            self.class_features[i] = 0.3*self.class_features[i]+0.7*(feature_detached[rel_labels==i]).mean(dim=0)
+
+            # rel_labels for each cluster
+            rel_label_chs = []
+            rel_label_chs.append(rel_labels)
+            for i in range(1, self.num_tree):
+                rel_label_ch = self.global2children[i][rel_labels]
+                rel_label_chs.append(rel_label_ch) 
+            add_losses['first_prediction'] = torch.zeros([1]).cuda() # combined feature (ctx+union)
+            div_n = 0
+            for i in range(self.num_tree):
+                ####### CROSS ENTROPY LOSS FOR EACH TREE ########
+                if (rel_label_chs[i]>=0).sum():
+                    div_n += 1
+                    add_losses['first_prediction'] += F.cross_entropy(first_dists[i], rel_label_chs[i], ignore_index=-1) 
+            # normalization
+            if div_n:
+                add_losses["first_prediction"] /= div_n
+
+            # binary loss for VCTree
+            if binary_preds is not None:
+                binary_loss = []
+                for bi_gt, bi_pred in zip(rel_binarys, binary_preds):
+                    bi_gt = (bi_gt > 0).float()
+                    binary_loss.append(F.binary_cross_entropy_with_logits(bi_pred, bi_gt))
+                add_losses["binary_loss"] = sum(binary_loss) / len(binary_loss)
+        
+        return obj_dist_list, final_dists_list, add_losses
+
 
 def make_roi_relation_predictor(cfg, in_channels, taxonomy=None):
     func = registry.ROI_RELATION_PREDICTOR[cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR]
