@@ -125,7 +125,7 @@ class PostProcessor(nn.Module):
             rel_class = rel_class + 1
 
             ################# concat probabilities ##################
-            if self.is_cluster:
+            if self.is_cluster and self.num_tree>1:
                 scores = torch.zeros((rel_logit.shape[0], self.num_node)).cuda()
                 scores[:, torch.from_numpy(self.children_[0])] = rel_class_prob
                 rel_class_per_tree = -scores.new_ones((rel_logit.shape[0], self.num_tree)).long()

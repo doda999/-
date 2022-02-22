@@ -35,7 +35,8 @@ class RelationFeatureExtractor(nn.Module):
             self.out_channels = self.feature_extractor.out_channels
 
         # separete spatial
-        self.separate_spatial = self.cfg.MODEL.ROI_RELATION_HEAD.CAUSAL.SEPARATE_SPATIAL and self.cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR=="CausalAnalysisPredictor"
+        self.separate_spatial = (self.cfg.MODEL.ROI_RELATION_HEAD.CAUSAL.SEPARATE_SPATIAL and self.cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR=="CausalAnalysisPredictor") \
+                                    or (self.cfg.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.SEPARATE_SPATIAL and self.cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR=="CausalPSKTPredictor")
         if self.separate_spatial:
             input_size = self.feature_extractor.resize_channels
             out_dim = self.feature_extractor.out_channels

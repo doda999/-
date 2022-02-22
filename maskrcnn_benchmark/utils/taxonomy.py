@@ -61,9 +61,12 @@ def build_taxonomy(config):
         json_path = config.MODEL.ROI_RELATION_HEAD.PSKT.TAXONOMY_PATH
     elif config.MODEL.ROI_RELATION_HEAD.PREDICTOR == "PSKTAllPredictor":
         json_path = config.MODEL.ROI_RELATION_HEAD.PSKTALL.TAXONOMY_PATH
-    if config.MODEL.ROI_RELATION_HEAD.PREDICTOR == "PSKTRootAllPredictor":
+    elif config.MODEL.ROI_RELATION_HEAD.PREDICTOR == "PSKTRootAllPredictor":
         json_path = config.MODEL.ROI_RELATION_HEAD.PSKTROOTALL.TAXONOMY_PATH
+    elif config.MODEL.ROI_RELATION_HEAD.PREDICTOR == "CausalPSKTPredictor":
+        json_path = config.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.TAXONOMY_PATH
 
+    assert json_path!="", "Invalid taxonmy path."
     p = pathlib.PurePath(json_path)
     npy_path = os.path.join(p.parent, p.stem+".npy")
     if os.path.exists(npy_path):

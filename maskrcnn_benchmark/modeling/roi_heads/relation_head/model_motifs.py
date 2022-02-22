@@ -272,7 +272,7 @@ class LSTMContext(nn.Module):
         
         # untreated average features
         self.average_ratio = 0.0005
-        self.effect_analysis = config.MODEL.ROI_RELATION_HEAD.CAUSAL.EFFECT_ANALYSIS
+        self.effect_analysis = config.MODEL.ROI_RELATION_HEAD.CAUSAL.EFFECT_ANALYSIS or config.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.EFFECT_ANALYSIS
 
         if self.effect_analysis:
             self.register_buffer("untreated_dcd_feat", torch.zeros(self.hidden_dim + self.obj_dim + self.embed_dim + 128))

@@ -1743,6 +1743,387 @@ class PSKTRootAllPredictor(nn.Module):
         
         return obj_dist_list, final_dists_list, add_losses
 
+@registry.ROI_RELATION_PREDICTOR.register("CausalPSKTPredictor")
+class CausalPSKTPredictor(nn.Module):
+    def __init__(self, config, in_channels, taxonomy=None):
+        super(CausalPSKTPredictor, self).__init__()
+        self.cfg = config
+        self.attribute_on = config.MODEL.ATTRIBUTE_ON
+        self.spatial_for_vision = config.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.SPATIAL_FOR_VISION
+        self.num_obj_cls = config.MODEL.ROI_BOX_HEAD.NUM_CLASSES
+        self.num_rel_cls = config.MODEL.ROI_RELATION_HEAD.NUM_CLASSES
+        self.separate_spatial = config.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.SEPARATE_SPATIAL
+        self.transfer = config.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.KNOWLEDGE_TRANSFER
+        self.feature_loss = config.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.FEATURE_LOSS
+        self.ctx_feat_path = config.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.PRETRAINED_CTX_FEATURE_PATH
+        self.vis_feat_path = config.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.PRETRAINED_VIS_FEATURE_PATH
+        self.effect_type = config.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.EFFECT_TYPE
+
+        if config.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
+            if config.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL:
+                mode = 'predcls'
+            else:
+                mode = 'sgcls'
+        else:
+            mode = 'sgdet'
+        
+        assert in_channels is not None
+        num_inputs = in_channels
+
+        # set taxonomy
+        self.T = taxonomy
+        self.num_tree = self.T["num_tree"]
+        self.global2children = torch.from_numpy(self.T["global_to_children"]).cuda()
+        self.is_ancestor_mat = torch.from_numpy(self.T["is_ancestor_mat"].astype(config.DTYPE)).cuda()
+        self.num_children = self.T["num_children"]
+        self.children_idxs = self.T["children"]
+        self.children_tree_index = self.T["children_tree_index"]
+        if self.num_tree>1:
+            self.freq_compress = nn.ModuleList(nn.Linear(self.num_rel_cls, num) for num in self.num_children)
+
+        # load class dict
+        statistics = get_dataset_statistics(config)
+        obj_classes, rel_classes = statistics['obj_classes'], statistics['rel_classes']
+        assert self.num_obj_cls==len(obj_classes)
+        assert self.num_rel_cls==len(rel_classes)
+        # init contextual lstm encoding
+        if config.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.CONTEXT_LAYER == "motifs":
+            self.context_layer = LSTMContext(config, obj_classes, rel_classes, in_channels)
+        elif config.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.CONTEXT_LAYER == "vctree":
+            self.context_layer = VCTreeLSTMContext(config, obj_classes, rel_classes, statistics, in_channels)
+        else:
+            print('ERROR: Invalid Context Layer')
+
+        # post decoding
+        self.hidden_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
+        self.pooling_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM
+        
+        self.edge_dim = self.hidden_dim
+        self.post_emb = nn.Linear(self.hidden_dim, self.hidden_dim * 2)
+        self.post_cat = nn.Sequential(*[nn.Linear(self.hidden_dim * 2, self.pooling_dim),
+                                        nn.ReLU(inplace=True),])
+
+        self.ctx_first_compress = nn.ModuleList(nn.Linear(self.pooling_dim, num) for i, num in enumerate(self.num_children))
+        self.vis_first_compress = nn.ModuleList(nn.Linear(self.pooling_dim, num) for i, num in enumerate(self.num_children))
+        
+        assert self.pooling_dim == config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM
+
+        # convey statistics into FrequencyBias to avoid loading again
+        self.freq_bias = FrequencyBias(config, statistics)
+
+        # add spatial emb for visual feature
+        if self.spatial_for_vision:
+            self.spt_emb = nn.Sequential(*[nn.Linear(32, self.hidden_dim), 
+                                            nn.ReLU(inplace=True),
+                                            nn.Linear(self.hidden_dim, self.pooling_dim),
+                                            nn.ReLU(inplace=True)
+                                        ])
+
+        if self.transfer:
+            self.ctx_first_compress[0] = nn.Linear(self.pooling_dim, self.num_rel_cls)
+            self.vis_first_compress[0] = nn.Linear(self.pooling_dim, self.num_rel_cls)
+            self.ctx_final_compress = nn.ModuleList(nn.Linear(self.pooling_dim, num) for num in self.num_children)
+            self.vis_final_compress = nn.ModuleList(nn.Linear(self.pooling_dim, num) for num in self.num_children)
+            self.class_ctx_features = nn.Parameter(torch.zeros(self.num_rel_cls, self.pooling_dim).to(torch.float), requires_grad=False)
+            self.class_vis_features = nn.Parameter(torch.zeros(self.num_rel_cls, self.pooling_dim).to(torch.float), requires_grad=False)
+            if self.ctx_feat_path:
+                self.class_ctx_features = nn.Parameter(torch.from_numpy(np.load(self.ctx_feat_path, allow_pickle=True).item()["avg_feature"]).to(torch.float).cuda(), requires_grad=False)
+            if self.vis_feat_path:
+                self.class_vis_features = nn.Parameter(torch.from_numpy(np.load(self.vis_feat_path, allow_pickle=True).item()["avg_feature"]).to(torch.float).cuda(), requires_grad=False)
+            if self.feature_loss != "none":
+                assert self.feature_loss=="mse" or self.feature_loss=="margin", "Please select 'mse' or 'margin', 'none' for feature loss"
+                self.class_ctx_features.requires_grad = True
+                self.class_vis_features.requires_grad = True
+                self.mseloss = nn.MSELoss()
+                if self.feature_loss == "margin":
+                    self.margin = 80.0
+                    self.weight = 1 if mode == "sgdet" else 0.1
+            self.alpha = config.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.CALIBRATION_ALPHA
+        
+        self.layer_initialize()
+
+        self.label_smooth_loss = Label_Smoothing_Regression(e=1.0)
+
+        # untreated average features
+        self.effect_analysis = config.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.EFFECT_ANALYSIS
+        self.average_ratio = 0.0005
+
+        self.register_buffer("untreated_spt", torch.zeros(32))
+        self.register_buffer("untreated_conv_spt", torch.zeros(self.pooling_dim))
+        self.register_buffer("avg_post_ctx", torch.zeros(self.pooling_dim))
+        self.register_buffer("untreated_feat", torch.zeros(self.pooling_dim))
+    
+    def layer_initialize(self):
+        layer_init(self.post_emb, 10.0 * (1.0 / self.hidden_dim) ** 0.5, mode="normal")
+        layer_init(self.post_cat[0], mode="xavier")
+        if self.spatial_for_vision:
+            layer_init(self.spt_emb[0], mode="xavier")
+            layer_init(self.spt_emb[2], mode="xavier")
+        for i in range(self.num_tree):
+            layer_init(self.ctx_first_compress[i], mode="xavier")
+            layer_init(self.vis_first_compress[i], mode="xavier")
+            if self.num_tree>1:
+                layer_init(self.freq_compress[i], mode="xavier")
+            if self.transfer:
+                layer_init(self.ctx_final_compress[i], mode="xavier")
+                layer_init(self.vis_final_compress[i], mode="xavier")
+
+        
+    def pair_feature_generate(self, roi_features, proposals, rel_pair_idxs, num_objs, obj_boxs, logger, ctx_average=False):
+        # encode context infomation
+        obj_dists, obj_preds, edge_ctx, binary_preds = self.context_layer(roi_features, proposals, rel_pair_idxs, logger, ctx_average=ctx_average)
+        obj_dist_prob = F.softmax(obj_dists, dim=-1)
+
+        # post decode
+        edge_rep = self.post_emb(edge_ctx)
+        edge_rep = edge_rep.view(edge_rep.size(0), 2, self.edge_dim)
+        head_rep = edge_rep[:, 0].contiguous().view(-1, self.edge_dim)
+        tail_rep = edge_rep[:, 1].contiguous().view(-1, self.edge_dim)
+        # split
+        head_reps = head_rep.split(num_objs, dim=0)
+        tail_reps = tail_rep.split(num_objs, dim=0)
+        obj_preds = obj_preds.split(num_objs, dim=0)
+        obj_prob_list = obj_dist_prob.split(num_objs, dim=0)
+        obj_dist_list = obj_dists.split(num_objs, dim=0)
+        ctx_reps = []
+        pair_preds = []
+        pair_obj_probs = []
+        pair_bboxs_info = []
+        for pair_idx, head_rep, tail_rep, obj_pred, obj_box, obj_prob in zip(rel_pair_idxs, head_reps, tail_reps, obj_preds, obj_boxs, obj_prob_list):
+            ctx_reps.append( torch.cat((head_rep[pair_idx[:,0]], tail_rep[pair_idx[:,1]]), dim=-1) )
+            pair_preds.append( torch.stack((obj_pred[pair_idx[:,0]], obj_pred[pair_idx[:,1]]), dim=1) )
+            pair_obj_probs.append( torch.stack((obj_prob[pair_idx[:,0]], obj_prob[pair_idx[:,1]]), dim=2) )
+            pair_bboxs_info.append( get_box_pair_info(obj_box[pair_idx[:,0]], obj_box[pair_idx[:,1]]) )
+        pair_obj_probs = cat(pair_obj_probs, dim=0)
+        pair_bbox = cat(pair_bboxs_info, dim=0)
+        pair_pred = cat(pair_preds, dim=0)
+        ctx_rep = cat(ctx_reps, dim=0)
+        post_ctx_rep = self.post_cat(ctx_rep)
+
+        return post_ctx_rep, pair_pred, pair_bbox, pair_obj_probs, binary_preds, obj_dist_prob, edge_rep, obj_dist_list
+
+    def refine_feature(self, feature, first_dist, class_features, tree_index):
+        p = F.softmax(first_dist, -1)
+        max_score, max_idx = p.max(dim=1)
+        #### knowledge calculation ####
+        if tree_index==0:
+            parent_feature = class_features
+        else:
+            parent_feature = torch.matmul(self.is_ancestor_mat[self.children_idxs[tree_index]], class_features)
+            div_n = torch.sum(self.is_ancestor_mat[self.children_idxs[tree_index]], dim=1)
+            parent_feature = parent_feature/div_n.view(-1,1)
+        knowledge = torch.matmul(p, parent_feature)
+        #### refine feature ####
+        attention = torch.clamp(torch.tanh(feature+knowledge), min=0)
+        refined_feature = feature + attention*knowledge
+        #### feature calibration ####
+        refined_feature = self.alpha*torch.mul(max_score.view(-1,1), refined_feature)
+        return refined_feature
+        
+    def knowledge_transfer(self, vis_rep, ctx_rep, frq_dist, tree_index):
+        if self.num_tree>1:
+            frq_dist = self.freq_compress[tree_index](frq_dist)
+        vis_first_dist = self.vis_first_compress[tree_index](vis_rep)
+        ctx_first_dist = self.ctx_first_compress[tree_index](ctx_rep)
+        if not self.transfer:
+            return vis_first_dist, ctx_first_dist, None, None, frq_dist
+
+        refined_vis_rep = self.refine_feature(vis_rep, vis_first_dist, self.class_vis_features.detach(), tree_index)
+        refined_ctx_rep = self.refine_feature(ctx_rep, ctx_first_dist, self.class_ctx_features.detach(), tree_index)
+        vis_final_dist = self.vis_final_compress[tree_index](refined_vis_rep)
+        ctx_final_dist = self.ctx_final_compress[tree_index](refined_ctx_rep)
+        return vis_first_dist, ctx_first_dist, vis_final_dist, ctx_final_dist, frq_dist
+        
+
+    def forward(self, proposals, rel_pair_idxs, rel_labels, rel_binarys, roi_features, union_features, logger=None):
+        """
+        Returns:
+            obj_dists (list[Tensor]): logits of object label distribution
+            rel_dists (list[Tensor])
+            rel_pair_idxs (list[Tensor]): (num_rel, 2) index of subject and object
+            union_features (Tensor): (batch_num_rel, context_pooling_dim): visual union feature of each pair
+        """
+        num_rels = [r.shape[0] for r in rel_pair_idxs]
+        num_objs = [len(b) for b in proposals]
+        obj_boxs = [get_box_info(p.bbox, need_norm=True, proposal=p) for p in proposals]
+
+        assert len(num_rels) == len(num_objs)
+
+        post_ctx_rep, pair_pred, pair_bbox, pair_obj_probs, binary_preds, obj_dist_prob, edge_rep, obj_dist_list = self.pair_feature_generate(roi_features, proposals, rel_pair_idxs, num_objs, obj_boxs, logger)
+
+        if (not self.training) and self.effect_analysis:
+            with torch.no_grad():
+                avg_post_ctx_rep, _, _, avg_pair_obj_prob, _, _, _, _ = self.pair_feature_generate(roi_features, proposals, rel_pair_idxs, num_objs, obj_boxs, logger, ctx_average=True)
+
+        if self.separate_spatial:
+            union_features, spatial_conv_feats = union_features
+            post_ctx_rep = post_ctx_rep * spatial_conv_feats
+        
+        if self.spatial_for_vision:
+            post_ctx_rep = post_ctx_rep * self.spt_emb(pair_bbox)
+
+        ctx_first_dists = []
+        vis_first_dists = []
+        ctx_final_dists = []
+        vis_final_dists = []
+        frq_dists = []
+
+        frq_dist = self.freq_bias.index_with_labels(pair_pred.long())
+        for i in range(self.num_tree):
+            vis_first_dist, ctx_first_dist, vis_final_dist, ctx_final_dist, frq_dist_ = self.knowledge_transfer(union_features, post_ctx_rep, frq_dist, i)
+            ctx_first_dists.append(ctx_first_dist)
+            vis_first_dists.append(vis_first_dist)
+            frq_dists.append(frq_dist_)
+            if self.transfer:
+                ctx_final_dists.append(ctx_final_dist)
+                vis_final_dists.append(vis_final_dist)
+        
+        final_dists = []
+        if self.transfer:
+            final_dists = [ctx_final_dists[i]+vis_final_dists[i]+frq_dists[i] for i in range(self.num_tree)]
+        else:
+            final_dists = [ctx_first_dists[i]+vis_first_dists[i]+frq_dists[i] for i in range(self.num_tree)]
+
+        add_losses = {}
+        # additional loss
+        if self.training:
+            rel_labels = cat(rel_labels, dim=0)
+            if self.transfer:
+                vis_feat_detached = union_features.detach()
+                ctx_feat_detached = post_ctx_rep.detach()
+                if self.feature_loss == "mse":
+                    add_losses["feature"] = self.mseloss(self.class_vis_features[rel_labels], vis_feat_detached)
+                    add_losses["feature"] = self.mseloss(self.class_ctx_features[rel_labels], ctx_feat_detached)
+                
+                elif self.feature_loss == "margin":
+                    batch_size = vis_feat_detached.size(0)
+                    # attract loss
+                    counts = vis_feat_detached.new_ones(self.num_rel_cls)
+                    counts = counts.scatter_add_(0, rel_labels, counts.new_ones(batch_size))
+                    class_vis_feature_batch = self.class_vis_features.index_select(0,rel_labels).to(vis_feat_detached.dtype)
+                    class_ctx_feature_batch = self.class_ctx_features.index_select(0,rel_labels).to(ctx_feat_detached.dtype)
+                    diff_vis = (vis_feat_detached - class_vis_feature_batch).pow(2)/2
+                    diff_ctx = (ctx_feat_detached - class_ctx_feature_batch).pow(2)/2
+                    div = counts.index_select(0, rel_labels)
+                    diff_vis /= div.view(-1,1)
+                    diff_ctx /= div.view(-1,1)
+                    add_losses["feature attract loss"] = self.weight*(diff_vis.sum()+diff_ctx.sum())/batch_size
+                    # repel loss
+                    vis_dist_mat = torch.cdist(vis_feat_detached, self.class_vis_features.to(vis_feat_detached.dtype))
+                    ctx_dist_mat = torch.cdist(ctx_feat_detached, self.class_ctx_features.to(ctx_feat_detached.dtype))
+                    classes = torch.arange(self.num_rel_cls).long().cuda()
+                    labels_expand = rel_labels.unsqueeze(1).expand(batch_size, self.num_rel_cls)
+                    mask = labels_expand.ne(classes.expand(batch_size, self.num_rel_cls)).int()
+                    vis_distmat_neg = torch.mul(vis_dist_mat, mask)
+                    ctx_distmat_neg = torch.mul(ctx_dist_mat, mask)
+                    # original attract:repel = 1:0.01
+                    add_losses["feature repel loss"] = self.weight*0.01*torch.clamp(self.margin - (vis_distmat_neg.sum()+ctx_distmat_neg.sum())/(batch_size*self.num_rel_cls), 0.0, 1e6)
+                
+                elif self.feature_loss=="none":
+                    # moving average
+                    with torch.no_grad():
+                        for i in range(self.num_rel_cls):
+                            if i in rel_labels:
+                                self.class_vis_features[i] = 0.3*self.class_vis_features[i]+0.7*(vis_feat_detached[rel_labels==i]).mean(dim=0)
+                                self.class_ctx_features[i] = 0.3*self.class_ctx_features[i]+0.7*(ctx_feat_detached[rel_labels==i]).mean(dim=0)
+
+            # binary loss for VCTree
+            if binary_preds is not None:
+                binary_loss = []
+                for bi_gt, bi_pred in zip(rel_binarys, binary_preds):
+                    bi_gt = (bi_gt > 0).float()
+                    binary_loss.append(F.binary_cross_entropy_with_logits(bi_pred, bi_gt))
+                add_losses["binary_loss"] = sum(binary_loss) / len(binary_loss)
+
+            rel_label_chs = []
+            for i in range(self.num_tree):
+                rel_label_ch = self.global2children[i][rel_labels]
+                rel_label_chs.append(rel_label_ch)
+            
+            # branch constraint: make sure each branch can predict independently
+            add_losses['auxiliary_ctx'] = torch.zeros([1]).cuda()
+            add_losses['auxiliary_vis'] = torch.zeros([1]).cuda()
+            add_losses['auxiliary_frq'] = torch.zeros([1]).cuda()
+            div_n = 0
+            for i in range(self.num_tree):
+                if (rel_label_chs[i]>=0).sum()>0:
+                    div_n += 1
+                    add_losses["auxiliary_frq"] += F.cross_entropy(frq_dists[i], rel_label_chs[i], ignore_index=-1)
+                    if i==0 and self.transfer:
+                        add_losses["auxiliary_ctx"] += F.cross_entropy(ctx_first_dists[i], rel_labels)
+                        add_losses["auxiliary_vis"] += F.cross_entropy(vis_first_dists[i], rel_labels)
+                    else:
+                        add_losses["auxiliary_ctx"] += F.cross_entropy(ctx_first_dists[i], rel_label_chs[i], ignore_index=-1)
+                        add_losses["auxiliary_vis"] += F.cross_entropy(vis_first_dists[i], rel_label_chs[i], ignore_index=-1)
+                    if self.transfer:
+                        add_losses["auxiliary_ctx"] += F.cross_entropy(ctx_final_dists[i], rel_label_chs[i], ignore_index=-1)
+                        add_losses["auxiliary_vis"] += F.cross_entropy(vis_final_dists[i], rel_label_chs[i], ignore_index=-1)
+            # normalization
+            if div_n:
+                add_losses["auxiliary_ctx"] /= div_n
+                add_losses["auxiliary_vis"] /= div_n
+                add_losses["auxiliary_frq"] /= div_n
+
+            # untreated average feature
+            if self.spatial_for_vision:
+                self.untreated_spt = self.moving_average(self.untreated_spt, pair_bbox)
+            if self.separate_spatial:
+                self.untreated_conv_spt = self.moving_average(self.untreated_conv_spt, spatial_conv_feats)
+            self.avg_post_ctx = self.moving_average(self.avg_post_ctx, post_ctx_rep)
+            self.untreated_feat = self.moving_average(self.untreated_feat, union_features)
+
+        elif self.effect_analysis:
+            with torch.no_grad():
+                # untreated spatial
+                if self.spatial_for_vision:
+                    avg_spt_rep = self.spt_emb(self.untreated_spt.clone().detach().view(1, -1))
+                # untreated context
+                avg_ctx_rep = avg_post_ctx_rep * avg_spt_rep if self.spatial_for_vision else avg_post_ctx_rep  
+                avg_ctx_rep = avg_ctx_rep * self.untreated_conv_spt.clone().detach().view(1, -1) if self.separate_spatial else avg_ctx_rep
+                # untreated visual
+                avg_vis_rep = self.untreated_feat.clone().detach().view(1, -1)
+                # untreated category dist
+                avg_frq_rep = avg_pair_obj_prob
+
+            frq_dist = self.freq_bias.index_with_probability(pair_obj_probs)
+            avg_frq_dist = self.freq_bias.index_with_probability(avg_frq_rep)
+            for i in range(self.num_tree):
+                if self.num_tree>1 and i==0:
+                    continue
+                avg_ctx_dist = self.ctx_first_compress[i](avg_ctx_rep)
+                if self.effect_type == 'TDE':   # TDE of CTX
+                    if self.transfer:
+                        final_dists[i] = (vis_final_dists[i]+ctx_final_dists[i]+frq_dists[i]) - (vis_final_dists[i]+avg_ctx_dist+frq_dists[i])
+                    else:
+                        final_dists[i] = (vis_first_dists[i]+ctx_first_dists[i]+frq_dists[i]) - (vis_first_dists[i]+avg_ctx_dist+frq_dists[i])
+                elif self.effect_type == 'NIE': # NIE of FRQ
+                    if i>0:
+                        avg_frq_dist_ = self.freq_compress[i](avg_frq_dist)
+                    if self.transfer:
+                        final_dists[i] = (vis_final_dists[i]+avg_ctx_dist+frq_dists[i]) - (vis_final_dists[i]+avg_ctx_dist+avg_frq_dist_)
+                    else:
+                        final_dists[i] = (vis_first_dists[i]+avg_ctx_dist+frq_dists[i]) - (vis_first_dists[i]+avg_ctx_dist+avg_frq_dist_)
+                elif self.effect_type == 'TE':  # Total Effect
+                    if i>0:
+                        avg_frq_dist_ = self.freq_compress[i](avg_frq_dist)
+                    if self.transfer:
+                        final_dists[i] = (vis_final_dists[i]+ctx_final_dists[i]+frq_dists[i]) - (vis_final_dists[i]+avg_ctx_dist+avg_frq_dist_)
+                    else:
+                        final_dists[i] = (vis_first_dists[i]+ctx_first_dists[i]+frq_dists[i]) - (vis_first_dists[i]+avg_ctx_dist+avg_frq_dist_)
+                else:
+                    assert self.effect_type == 'none'
+                    pass
+
+        final_dist_list = [final_dist.split(num_rels, dim=0) for final_dist in final_dists]
+
+        return obj_dist_list, final_dist_list, add_losses
+
+    def moving_average(self, holder, input):
+        assert len(input.shape) == 2
+        with torch.no_grad():
+            holder = holder * (1 - self.average_ratio) + self.average_ratio * input.mean(0).view(-1)
+        return holder
+
 
 def make_roi_relation_predictor(cfg, in_channels, taxonomy=None):
     func = registry.ROI_RELATION_PREDICTOR[cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR]

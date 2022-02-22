@@ -75,7 +75,8 @@ MODEL:
     # PREDICTOR: "HierarchicalCausalPredictor"
     # PREDICTOR: "KnowledgeTransferPredictor"
     # PREDICTOR: "PSKTPredictor"
-    PREDICTOR: "PSKTAllPredictor"
+    # PREDICTOR: "PSKTAllPredictor"
+    PREDICTOR: "CausalPSKTPredictor"
     ################# Parameters for Motif Predictor ##################
     CONTEXT_OBJ_LAYER: 1
     CONTEXT_REL_LAYER: 1
@@ -113,6 +114,16 @@ MODEL:
       CALIBRATION_ALPHA: 10.0
       KNOWLEDGE_TRANSFER: True
       FEATURE_LOSS: "margin"  
+    ############# Parameters for Predicate Similarity used Knowledge Transfer (with causal analysis) Predictor ##############
+    CAUSALPSKT:
+      CONTEXT_LAYER: 'motifs'         # candicates: motifs, vctree, vtranse
+      TAXONOMY_PATH: "datasets/vg/flat.json"
+      CALIBRATION_ALPHA: 10.0
+      KNOWLEDGE_TRANSFER: True
+      FEATURE_LOSS: "margin"  
+      SPATIAL_FOR_VISION: True
+      EFFECT_ANALYSIS: True
+      EFFECT_TYPE: 'TDE'             # candicates: 'TDE', 'NIE', 'TE', 'none'
     ############### Parameters for Transformer Predictor ##############
     TRANSFORMER:
       DROPOUT_RATE: 0.1
