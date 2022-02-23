@@ -35,13 +35,13 @@ class ROIRelationHead(torch.nn.Module):
             feat_dim = self.box_feature_extractor.out_channels
         taxonomy = None
         if "PSKT" in self.predictor:
-          taxonomy = build_taxonomy(cfg)
-          assert taxonomy is not None
+            taxonomy = build_taxonomy(cfg)
+            assert taxonomy is not None
         self.predictor = make_roi_relation_predictor(cfg, feat_dim, taxonomy=taxonomy)
         self.post_processor = make_roi_relation_post_processor(cfg, taxonomy=taxonomy)
         self.loss_evaluator = make_roi_relation_loss_evaluator(cfg, taxonomy=taxonomy)
         self.samp_processor = make_roi_relation_samp_processor(cfg)
-        self.vis_record = cfg.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.VIS_RECORD
+        self.vis_record = False
 
         # parameters
         self.use_union_box = self.cfg.MODEL.ROI_RELATION_HEAD.PREDICT_USE_VISION

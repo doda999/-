@@ -156,7 +156,7 @@ def make_batch_data_sampler(
 def make_data_loader(cfg, mode='train', is_distributed=False, start_iter=0):
     assert mode in {'train', 'val', 'test'}
     num_gpus = get_world_size()
-    is_train = mode == 'train' and not cfg.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.VIS_RECORD
+    is_train = mode == 'train'
     if is_train:
         images_per_batch = cfg.SOLVER.IMS_PER_BATCH
         assert (

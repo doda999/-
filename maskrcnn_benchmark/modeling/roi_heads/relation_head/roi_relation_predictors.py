@@ -699,7 +699,7 @@ class KnowledgeTransferPredictor(nn.Module):
         self.use_bias = config.MODEL.ROI_RELATION_HEAD.PREDICT_USE_BIAS
         self.feat_mode = config.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.FEAT_MODE 
         self.transfer = config.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.KNOWLEDGE_TRANSFER
-        self.vis_record = config.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.VIS_RECORD
+        self.vis_record = False
         self.feature_loss = config.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.FEATURE_LOSS
         self.feat_path = config.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.PRETRAINED_FEATURE_PATH
         # self.source = config.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.KNOWLEDGE_SOURCE
@@ -779,12 +779,6 @@ class KnowledgeTransferPredictor(nn.Module):
         # for object class embedding 
         if self.use_bias:
             self.freq_bias = FrequencyBias(config, statistics)
-
-        if self.vis_record:
-            assert get_world_size()==1
-            self.average_ratio = 0.3
-            with torch.no_grad():
-                self.vis = {"avg_feature": np.zeros((self.num_rel_cls, self.feat_dim))}
 
     def layer_initialize(self):
         layer_init(self.post_emb, 10.0 * (1.0 / self.hidden_dim) ** 0.5, mode="normal")
@@ -936,10 +930,10 @@ class KnowledgeTransferPredictor(nn.Module):
         Update feature mean, sum, squared sum
         """
         rel_labels = cat(rel_labels, dim=0).to('cpu').numpy()
-        feat = feature.detach().to('cpu').numpy()
+        feature = feature.detach().to('cpu').numpy()
         for i in range(self.num_rel_cls):
-            if len(feat[rel_labels==i]):
-                self.vis["avg_feature"][i] = self.average_ratio*self.vis["avg_feature"][i]+(1-self.average_ratio)*(feat[rel_labels==i]).mean(axis=0)
+            if len(feature[rel_labels==i]):
+                self.feat["avg_feature"][i] = 0.3*self.feat["avg_feature"][i]+0.7*(feature[rel_labels==i]).mean(axis=0)
 
 @registry.ROI_RELATION_PREDICTOR.register("PSKTPredictor")
 class PSKTPredictor(nn.Module):
@@ -1758,6 +1752,7 @@ class CausalPSKTPredictor(nn.Module):
         self.ctx_feat_path = config.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.PRETRAINED_CTX_FEATURE_PATH
         self.vis_feat_path = config.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.PRETRAINED_VIS_FEATURE_PATH
         self.effect_type = config.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.EFFECT_TYPE
+        self.vis_record = False
 
         if config.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
             if config.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL:
@@ -1852,6 +1847,7 @@ class CausalPSKTPredictor(nn.Module):
         self.register_buffer("untreated_conv_spt", torch.zeros(self.pooling_dim))
         self.register_buffer("avg_post_ctx", torch.zeros(self.pooling_dim))
         self.register_buffer("untreated_feat", torch.zeros(self.pooling_dim))
+
     
     def layer_initialize(self):
         layer_init(self.post_emb, 10.0 * (1.0 / self.hidden_dim) ** 0.5, mode="normal")
@@ -1950,6 +1946,10 @@ class CausalPSKTPredictor(nn.Module):
         assert len(num_rels) == len(num_objs)
 
         post_ctx_rep, pair_pred, pair_bbox, pair_obj_probs, binary_preds, obj_dist_prob, edge_rep, obj_dist_list = self.pair_feature_generate(roi_features, proposals, rel_pair_idxs, num_objs, obj_boxs, logger)
+
+        if self.vis_record:
+            self.feature_record(post_ctx_rep, union_features, rel_labels)
+            return None, None, {}
 
         if (not self.training) and self.effect_analysis:
             with torch.no_grad():
@@ -2085,34 +2085,35 @@ class CausalPSKTPredictor(nn.Module):
                 # untreated category dist
                 avg_frq_rep = avg_pair_obj_prob
 
-            frq_dist = self.freq_bias.index_with_probability(pair_obj_probs)
-            avg_frq_dist = self.freq_bias.index_with_probability(avg_frq_rep)
-            for i in range(self.num_tree):
-                if self.num_tree>1 and i==0:
-                    continue
-                avg_ctx_dist = self.ctx_first_compress[i](avg_ctx_rep)
-                if self.effect_type == 'TDE':   # TDE of CTX
-                    if self.transfer:
-                        final_dists[i] = (vis_final_dists[i]+ctx_final_dists[i]+frq_dists[i]) - (vis_final_dists[i]+avg_ctx_dist+frq_dists[i])
-                    else:
-                        final_dists[i] = (vis_first_dists[i]+ctx_first_dists[i]+frq_dists[i]) - (vis_first_dists[i]+avg_ctx_dist+frq_dists[i])
-                elif self.effect_type == 'NIE': # NIE of FRQ
-                    if i>0:
-                        avg_frq_dist_ = self.freq_compress[i](avg_frq_dist)
-                    if self.transfer:
-                        final_dists[i] = (vis_final_dists[i]+avg_ctx_dist+frq_dists[i]) - (vis_final_dists[i]+avg_ctx_dist+avg_frq_dist_)
-                    else:
-                        final_dists[i] = (vis_first_dists[i]+avg_ctx_dist+frq_dists[i]) - (vis_first_dists[i]+avg_ctx_dist+avg_frq_dist_)
-                elif self.effect_type == 'TE':  # Total Effect
-                    if i>0:
-                        avg_frq_dist_ = self.freq_compress[i](avg_frq_dist)
-                    if self.transfer:
-                        final_dists[i] = (vis_final_dists[i]+ctx_final_dists[i]+frq_dists[i]) - (vis_final_dists[i]+avg_ctx_dist+avg_frq_dist_)
-                    else:
-                        final_dists[i] = (vis_first_dists[i]+ctx_first_dists[i]+frq_dists[i]) - (vis_first_dists[i]+avg_ctx_dist+avg_frq_dist_)
-                else:
-                    assert self.effect_type == 'none'
-                    pass
+            if self.effect_type == "none":
+                frq_dist = self.freq_bias.index_with_probability(pair_obj_probs)
+                avg_frq_dist = self.freq_bias.index_with_probability(avg_frq_rep)
+                for i in range(self.num_tree):
+                    if self.num_tree>1 and i==0:
+                        continue
+                    avg_ctx_dist = self.ctx_first_compress[i](avg_ctx_rep)
+                    if self.effect_type == 'TDE':   # TDE of CTX
+                        if self.transfer:
+                            final_dists[i] = (vis_final_dists[i]+ctx_final_dists[i]+frq_dists[i]) - (vis_final_dists[i]+avg_ctx_dist+frq_dists[i])
+                        else:
+                            final_dists[i] = (vis_first_dists[i]+ctx_first_dists[i]+frq_dists[i]) - (vis_first_dists[i]+avg_ctx_dist+frq_dists[i])
+                    elif self.effect_type == 'NIE': # NIE of FRQ
+                        if i>0:
+                            avg_frq_dist_ = self.freq_compress[i](avg_frq_dist)
+                        if self.transfer:
+                            final_dists[i] = (vis_final_dists[i]+avg_ctx_dist+frq_dists[i]) - (vis_final_dists[i]+avg_ctx_dist+avg_frq_dist_)
+                        else:
+                            final_dists[i] = (vis_first_dists[i]+avg_ctx_dist+frq_dists[i]) - (vis_first_dists[i]+avg_ctx_dist+avg_frq_dist_)
+                    elif self.effect_type == 'TE':  # Total Effect
+                        if i>0:
+                            avg_frq_dist_ = self.freq_compress[i](avg_frq_dist)
+                        if self.transfer:
+                            final_dists[i] = (vis_final_dists[i]+ctx_final_dists[i]+frq_dists[i]) - (vis_final_dists[i]+avg_ctx_dist+avg_frq_dist_)
+                        else:
+                            final_dists[i] = (vis_first_dists[i]+ctx_first_dists[i]+frq_dists[i]) - (vis_first_dists[i]+avg_ctx_dist+avg_frq_dist_)
+            else:
+                assert self.effect_type == 'none'
+                pass
 
         final_dist_list = [final_dist.split(num_rels, dim=0) for final_dist in final_dists]
 
@@ -2123,6 +2124,18 @@ class CausalPSKTPredictor(nn.Module):
         with torch.no_grad():
             holder = holder * (1 - self.average_ratio) + self.average_ratio * input.mean(0).view(-1)
         return holder
+    
+    def feature_record(self, ctx_rep, vis_rep, rel_labels):
+        """
+        Update feature mean, sum, squared sum
+        """
+        rel_labels = cat(rel_labels, dim=0).to('cpu').numpy()
+        ctx_rep = ctx_rep.detach().to('cpu').numpy()
+        vis_rep = vis_rep.detach().to('cpu').numpy()
+        for i in range(self.num_rel_cls):
+            if len(ctx_rep[rel_labels==i]):
+                self.ctx["avg_feature"][i] = 0.3*self.ctx["avg_feature"][i]+0.7*(ctx_rep[rel_labels==i]).mean(axis=0)
+                self.vis["avg_feature"][i] = 0.3*self.vis["avg_feature"][i]+0.7*(vis_rep[rel_labels==i]).mean(axis=0)
 
 
 def make_roi_relation_predictor(cfg, in_channels, taxonomy=None):
