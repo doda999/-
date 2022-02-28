@@ -25,6 +25,7 @@ checkpoints/
 *.swo
 *.swp
 *~
+*.sh*
 
 # Pycharm editor settings
 .idea

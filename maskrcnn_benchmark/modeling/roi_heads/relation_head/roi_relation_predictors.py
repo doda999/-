@@ -1947,20 +1947,22 @@ class CausalPSKTPredictor(nn.Module):
 
         post_ctx_rep, pair_pred, pair_bbox, pair_obj_probs, binary_preds, obj_dist_prob, edge_rep, obj_dist_list = self.pair_feature_generate(roi_features, proposals, rel_pair_idxs, num_objs, obj_boxs, logger)
 
-        if self.vis_record:
-            self.feature_record(post_ctx_rep, union_features, rel_labels)
-            return None, None, {}
-
-        if (not self.training) and self.effect_analysis:
-            with torch.no_grad():
-                avg_post_ctx_rep, _, _, avg_pair_obj_prob, _, _, _, _ = self.pair_feature_generate(roi_features, proposals, rel_pair_idxs, num_objs, obj_boxs, logger, ctx_average=True)
-
         if self.separate_spatial:
             union_features, spatial_conv_feats = union_features
             post_ctx_rep = post_ctx_rep * spatial_conv_feats
         
         if self.spatial_for_vision:
             post_ctx_rep = post_ctx_rep * self.spt_emb(pair_bbox)
+        
+        frq_dist = self.freq_bias.index_with_labels(pair_pred.long())
+        
+        if self.vis_record:
+            self.feature_record(post_ctx_rep, union_features, frq_dist, rel_labels)
+            return None, None, {}
+
+        if (not self.training) and self.effect_analysis:
+            with torch.no_grad():
+                avg_post_ctx_rep, _, _, avg_pair_obj_prob, _, _, _, _ = self.pair_feature_generate(roi_features, proposals, rel_pair_idxs, num_objs, obj_boxs, logger, ctx_average=True)
 
         ctx_first_dists = []
         vis_first_dists = []
@@ -1968,7 +1970,6 @@ class CausalPSKTPredictor(nn.Module):
         vis_final_dists = []
         frq_dists = []
 
-        frq_dist = self.freq_bias.index_with_labels(pair_pred.long())
         for i in range(self.num_tree):
             vis_first_dist, ctx_first_dist, vis_final_dist, ctx_final_dist, frq_dist_ = self.knowledge_transfer(union_features, post_ctx_rep, frq_dist, i)
             ctx_first_dists.append(ctx_first_dist)
@@ -2085,7 +2086,7 @@ class CausalPSKTPredictor(nn.Module):
                 # untreated category dist
                 avg_frq_rep = avg_pair_obj_prob
 
-            if self.effect_type == "none":
+            if self.effect_type != "none":
                 frq_dist = self.freq_bias.index_with_probability(pair_obj_probs)
                 avg_frq_dist = self.freq_bias.index_with_probability(avg_frq_rep)
                 for i in range(self.num_tree):
@@ -2125,17 +2126,19 @@ class CausalPSKTPredictor(nn.Module):
             holder = holder * (1 - self.average_ratio) + self.average_ratio * input.mean(0).view(-1)
         return holder
     
-    def feature_record(self, ctx_rep, vis_rep, rel_labels):
+    def feature_record(self, ctx_rep, vis_rep, frq_dist, rel_labels):
         """
         Update feature mean, sum, squared sum
         """
         rel_labels = cat(rel_labels, dim=0).to('cpu').numpy()
         ctx_rep = ctx_rep.detach().to('cpu').numpy()
         vis_rep = vis_rep.detach().to('cpu').numpy()
+        frq_dist = frq_dist.detach().to('cpu').numpy()
         for i in range(self.num_rel_cls):
             if len(ctx_rep[rel_labels==i]):
                 self.ctx["avg_feature"][i] = 0.3*self.ctx["avg_feature"][i]+0.7*(ctx_rep[rel_labels==i]).mean(axis=0)
                 self.vis["avg_feature"][i] = 0.3*self.vis["avg_feature"][i]+0.7*(vis_rep[rel_labels==i]).mean(axis=0)
+                self.frq["avg_feature"][i] = 0.3*self.frq["avg_feature"][i]+0.7*(frq_dist[rel_labels==i]).mean(axis=0)
 
 
 def make_roi_relation_predictor(cfg, in_channels, taxonomy=None):

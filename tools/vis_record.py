@@ -30,12 +30,15 @@ def record(model, data_loader, predictor, output_folder, device, timer=None, log
     elif predictor=="CausalPSKTPredictor":
         vis_savefile = os.path.join(output_folder,"vis.npy")
         ctx_savefile = os.path.join(output_folder,"ctx.npy")
+        frq_savefile = os.path.join(output_folder,"frq.npy")
         model.roi_heads.relation.predictor.vis = {"avg_feature": np.zeros((model.roi_heads.relation.predictor.num_rel_cls, model.roi_heads.relation.predictor.pooling_dim))}
         model.roi_heads.relation.predictor.ctx = {"avg_feature": np.zeros((model.roi_heads.relation.predictor.num_rel_cls, model.roi_heads.relation.predictor.pooling_dim))}
+        model.roi_heads.relation.predictor.frq = {"avg_feature": np.zeros((model.roi_heads.relation.predictor.num_rel_cls, model.roi_heads.relation.predictor.num_rel_cls))}
     model.eval()
     cpu_device = torch.device("cpu")
     torch.cuda.empty_cache()
     for itr, batch in enumerate(tqdm(data_loader)):
+        if itr == 20653: continue
         with torch.no_grad():
             images, targets, image_ids = batch
             targets = [target.to(device) for target in targets]
@@ -51,6 +54,7 @@ def record(model, data_loader, predictor, output_folder, device, timer=None, log
     elif predictor=="CausalPSKTPredictor":
         np.save(vis_savefile, model.roi_heads.relation.predictor.vis)
         np.save(ctx_savefile, model.roi_heads.relation.predictor.ctx)
+        np.save(frq_savefile, model.roi_heads.relation.predictor.frq)
     torch.cuda.empty_cache()
     return 
 
@@ -85,8 +89,7 @@ def main():
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
     predictor = cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR
-    cfg.SOLVER.IMS_PER_BATCH = 4
-    cfg.SOLVER.MAX_ITER = None
+    cfg.TEST.IMS_PER_BATCH = 1
     cfg.freeze()
 
     assert cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR=="CausalPSKTPredictor" or cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR=="KnowledgeTransferPredictor"
@@ -125,7 +128,7 @@ def main():
         output_folder = os.path.join(cfg.OUTPUT_DIR, "vis_record")
         mkdir(output_folder)
 
-    data_loader_train = make_data_loader(cfg, mode="train", is_distributed=distributed)
+    data_loader_train = make_data_loader(cfg, mode="train", is_distributed=distributed, record=True)[0]
 
     device = torch.device("cuda")
     num_devices = get_world_size()

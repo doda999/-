@@ -153,10 +153,10 @@ def make_batch_data_sampler(
     return batch_sampler
 
 
-def make_data_loader(cfg, mode='train', is_distributed=False, start_iter=0):
+def make_data_loader(cfg, mode='train', is_distributed=False, start_iter=0, record=False):
     assert mode in {'train', 'val', 'test'}
     num_gpus = get_world_size()
-    is_train = mode == 'train'
+    is_train = mode == 'train' and not record
     if is_train:
         images_per_batch = cfg.SOLVER.IMS_PER_BATCH
         assert (
