@@ -1554,6 +1554,10 @@ class PSKTRootAllPredictor(nn.Module):
         #for calibration
         self.alpha = config.MODEL.ROI_RELATION_HEAD.PSKTROOTALL.CALIBRATION_ALPHA
 
+        # feature encoder for root classification
+        self.root_encoder = nn.Linear(self.feat_dim, self.feat_dim//2)
+        self.final_compress[0] = nn.Linear(self.feat_dim//2, self.num_children[0])
+
 
         # for object class embedding 
         if self.use_bias:
@@ -1567,6 +1571,7 @@ class PSKTRootAllPredictor(nn.Module):
     def layer_initialize(self):
         layer_init(self.post_emb, 10.0 * (1.0 / self.hidden_dim) ** 0.5, mode="normal")
         layer_init(self.post_cat[0], mode="kaiming")
+        layer_init(self.root_encoder, mode="xavier")
         if self.union_single_not_match:
             layer_init(self.up_dim, mode="xavier")
         for i in range(self.num_tree):
@@ -1630,6 +1635,8 @@ class PSKTRootAllPredictor(nn.Module):
 
         #### feature calibration ####
         refined_feature = self.alpha*torch.mul(max_score.view(-1,1), refined_feature)
+        if tree_index==0:
+            refined_feature = self.root_encoder(refined_feature)
         final_dist = self.final_compress[tree_index](refined_feature)
         return first_dist, final_dist
 
