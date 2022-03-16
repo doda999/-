@@ -2,6 +2,7 @@
 import os
 import copy
 import logging
+from time import thread_time
 import numpy as np
 import torch
 from torch.nn.modules.activation import ReLU
@@ -1548,15 +1549,11 @@ class PSKTRootAllPredictor(nn.Module):
             self.mseloss = nn.MSELoss()
             if self.feature_loss == "margin":
                 self.margin = 40.0
-                self.weight = 0.1 if mode == "sgdet" else 1
+                self.weight = 1 
 
         self.final_compress = nn.ModuleList(nn.Linear(self.feat_dim, num) for num in self.num_children)
         #for calibration
         self.alpha = config.MODEL.ROI_RELATION_HEAD.PSKTROOTALL.CALIBRATION_ALPHA
-
-        # feature encoder for root classification
-        self.root_encoder = nn.Linear(self.feat_dim, self.feat_dim//2)
-        self.final_compress[0] = nn.Linear(self.feat_dim//2, self.num_children[0])
 
 
         # for object class embedding 
@@ -1571,7 +1568,6 @@ class PSKTRootAllPredictor(nn.Module):
     def layer_initialize(self):
         layer_init(self.post_emb, 10.0 * (1.0 / self.hidden_dim) ** 0.5, mode="normal")
         layer_init(self.post_cat[0], mode="kaiming")
-        layer_init(self.root_encoder, mode="xavier")
         if self.union_single_not_match:
             layer_init(self.up_dim, mode="xavier")
         for i in range(self.num_tree):
@@ -1635,8 +1631,6 @@ class PSKTRootAllPredictor(nn.Module):
 
         #### feature calibration ####
         refined_feature = self.alpha*torch.mul(max_score.view(-1,1), refined_feature)
-        if tree_index==0:
-            refined_feature = self.root_encoder(refined_feature)
         final_dist = self.final_compress[tree_index](refined_feature)
         return first_dist, final_dist
 
@@ -1839,7 +1833,7 @@ class CausalPSKTPredictor(nn.Module):
                 self.mseloss = nn.MSELoss()
                 if self.feature_loss == "margin":
                     self.margin = 80.0
-                    self.weight = 1 if mode == "sgdet" else 0.1
+                    self.weight = config.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.FEATURE_LOSS_WEIGHT
             self.alpha = config.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.CALIBRATION_ALPHA
         
         self.layer_initialize()
@@ -2100,6 +2094,11 @@ class CausalPSKTPredictor(nn.Module):
                     if self.num_tree>1 and i==0:
                         continue
                     avg_ctx_dist = self.ctx_first_compress[i](avg_ctx_rep)
+                    # include kt bias in avg_ctx_dist ----------------------
+                    if self.transfer: 
+                        refined_avg_ctx_rep = self.refine_feature(avg_ctx_rep, avg_ctx_dist, self.class_ctx_features.detach(), i)
+                        avg_ctx_dist = self.ctx_final_compress[i](refined_avg_ctx_rep)
+                    # -------------------------------------------------------
                     if self.effect_type == 'TDE':   # TDE of CTX
                         if self.transfer:
                             final_dists[i] = (vis_final_dists[i]+ctx_final_dists[i]+frq_dists[i]) - (vis_final_dists[i]+avg_ctx_dist+frq_dists[i])
@@ -2138,14 +2137,24 @@ class CausalPSKTPredictor(nn.Module):
         Update feature mean, sum, squared sum
         """
         rel_labels = cat(rel_labels, dim=0).to('cpu').numpy()
-        ctx_rep = ctx_rep.detach().to('cpu').numpy()
-        vis_rep = vis_rep.detach().to('cpu').numpy()
-        frq_dist = frq_dist.detach().to('cpu').numpy()
-        for i in range(self.num_rel_cls):
-            if len(ctx_rep[rel_labels==i]):
-                self.ctx["avg_feature"][i] = 0.3*self.ctx["avg_feature"][i]+0.7*(ctx_rep[rel_labels==i]).mean(axis=0)
-                self.vis["avg_feature"][i] = 0.3*self.vis["avg_feature"][i]+0.7*(vis_rep[rel_labels==i]).mean(axis=0)
-                self.frq["avg_feature"][i] = 0.3*self.frq["avg_feature"][i]+0.7*(frq_dist[rel_labels==i]).mean(axis=0)
+        # ctx_rep = ctx_rep.detach().to('cpu').numpy()
+        # vis_rep = vis_rep.detach().to('cpu').numpy()
+        # frq_dist = frq_dist.detach().to('cpu').numpy()
+        # for i in range(self.num_rel_cls):
+        #     if len(ctx_rep[rel_labels==i]):
+        #         self.ctx["avg_feature"][i] = 0.3*self.ctx["avg_feature"][i]+0.7*(ctx_rep[rel_labels==i]).mean(axis=0)
+        #         self.vis["avg_feature"][i] = 0.3*self.vis["avg_feature"][i]+0.7*(vis_rep[rel_labels==i]).mean(axis=0)
+        #         self.frq["avg_feature"][i] = 0.3*self.frq["avg_feature"][i]+0.7*(frq_dist[rel_labels==i]).mean(axis=0)
+
+        # 特徴量でなく、分類結果もrecord
+        with torch.no_grad():
+            vis_dist = self.vis_first_compress[0](vis_rep)
+            ctx_dist = self.ctx_first_compress[0](ctx_rep)
+            rel_dist = ctx_dist + vis_dist + frq_dist
+            rel_dist = rel_dist.detach().to('cpu').numpy()
+            for i in range(self.num_rel_cls):
+                if len(rel_dist[rel_labels==i]):
+                    self.rel["avg_feature"][i] = 0.3*self.rel["avg_feature"][i]+0.7*(rel_dist[rel_labels==i]).mean(axis=0)
 
 
 def make_roi_relation_predictor(cfg, in_channels, taxonomy=None):

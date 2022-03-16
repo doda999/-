@@ -121,9 +121,10 @@ MODEL:
       CALIBRATION_ALPHA: 10.0
       KNOWLEDGE_TRANSFER: False
       FEATURE_LOSS: "margin"  
+      FEATURE_LOSS_WEIGHT: 1.0
       SEPARATE_SPATIAL: False         # separate spatial in union feature
       SPATIAL_FOR_VISION: True
-      EFFECT_ANALYSIS: True
+      EFFECT_ANALYSIS: False
       EFFECT_TYPE: 'none'             # candicates: 'TDE', 'NIE', 'TE', 'none'
       FINETUNE_FOR_RELATION: False
     ############### Parameters for Transformer Predictor ##############

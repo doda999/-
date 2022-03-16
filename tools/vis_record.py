@@ -1,4 +1,5 @@
 import argparse
+from statistics import mode
 from maskrcnn_benchmark.utils.timer import Timer
 import os
 import numpy as np
@@ -28,12 +29,15 @@ def record(model, data_loader, predictor, output_folder, device, timer=None, log
         savefile = os.path.join(output_folder,"feat.npy")
         model.roi_heads.relation.predictor.feat = {"avg_feature": np.zeros((model.roi_heads.relation.predictor.num_rel_cls, model.roi_heads.relation.predictor.feat_dim))}
     elif predictor=="CausalPSKTPredictor":
-        vis_savefile = os.path.join(output_folder,"vis.npy")
-        ctx_savefile = os.path.join(output_folder,"ctx.npy")
-        frq_savefile = os.path.join(output_folder,"frq.npy")
-        model.roi_heads.relation.predictor.vis = {"avg_feature": np.zeros((model.roi_heads.relation.predictor.num_rel_cls, model.roi_heads.relation.predictor.pooling_dim))}
-        model.roi_heads.relation.predictor.ctx = {"avg_feature": np.zeros((model.roi_heads.relation.predictor.num_rel_cls, model.roi_heads.relation.predictor.pooling_dim))}
-        model.roi_heads.relation.predictor.frq = {"avg_feature": np.zeros((model.roi_heads.relation.predictor.num_rel_cls, model.roi_heads.relation.predictor.num_rel_cls))}
+        # vis_savefile = os.path.join(output_folder,"vis.npy")
+        # ctx_savefile = os.path.join(output_folder,"ctx.npy")
+        # frq_savefile = os.path.join(output_folder,"frq.npy")
+        # model.roi_heads.relation.predictor.vis = {"avg_feature": np.zeros((model.roi_heads.relation.predictor.num_rel_cls, model.roi_heads.relation.predictor.pooling_dim))}
+        # model.roi_heads.relation.predictor.ctx = {"avg_feature": np.zeros((model.roi_heads.relation.predictor.num_rel_cls, model.roi_heads.relation.predictor.pooling_dim))}
+        # model.roi_heads.relation.predictor.frq = {"avg_feature": np.zeros((model.roi_heads.relation.predictor.num_rel_cls, model.roi_heads.relation.predictor.num_rel_cls))}
+
+        rel_savefile = os.path.join(output_folder, "rel.npy")
+        model.roi_heads.relation.predictor.rel = {"avg_feature": np.zeros((model.roi_heads.relation.predictor.num_rel_cls, model.roi_heads.relation.predictor.num_rel_cls))}
     model.eval()
     cpu_device = torch.device("cpu")
     torch.cuda.empty_cache()
@@ -52,9 +56,10 @@ def record(model, data_loader, predictor, output_folder, device, timer=None, log
     if predictor=="KnowledgeTransferPredictor":
         np.save(savefile, model.roi_heads.relation.predictor.feat)
     elif predictor=="CausalPSKTPredictor":
-        np.save(vis_savefile, model.roi_heads.relation.predictor.vis)
-        np.save(ctx_savefile, model.roi_heads.relation.predictor.ctx)
-        np.save(frq_savefile, model.roi_heads.relation.predictor.frq)
+        # np.save(vis_savefile, model.roi_heads.relation.predictor.vis)
+        # np.save(ctx_savefile, model.roi_heads.relation.predictor.ctx)
+        # np.save(frq_savefile, model.roi_heads.relation.predictor.frq)
+        np.save(rel_savefile, model.roi_heads.relation.predictor.rel)
     torch.cuda.empty_cache()
     return 
 
