@@ -52,18 +52,19 @@ def train(cfg, local_rank, distributed, logger):
     else:
         slow_heads = []
 
-    
-
     # modules that should be always set in eval mode
     # their eval() method should be called after model.train() is called
     eval_modules = (model.rpn, model.backbone, model.roi_heads.box, )
     load_mapping = {"roi_heads.relation.box_feature_extractor" : "roi_heads.box.feature_extractor",
                     "roi_heads.relation.union_feature_extractor.feature_extractor" : "roi_heads.box.feature_extractor",}
-    if (cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR == "KnowledgeTransferPredictor" and cfg.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.KNOWLEDGE_TRANSFER == True) or \
-        (cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR == "PSKTPredictor"):
+    if cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR != "IMPPredictor" and cfg.MODEL.ROI_RELATION_HEAD.FINETUNE_FOR_RELATION:
         # fix pretrained baseline
-        eval_modules = (model.rpn, model.backbone, model.roi_heads.box, model.roi_heads.relation.union_feature_extractor, model.roi_heads.relation.box_feature_extractor, model.roi_heads.relation.predictor.context_layer, model.roi_heads.relation.predictor.post_emb, model.roi_heads.relation.predictor.post_cat, model.roi_heads.relation.predictor.freq_bias.obj_baseline)
+        eval_modules = (model.rpn, model.backbone, model.roi_heads.box, model.roi_heads.relation.union_feature_extractor, model.roi_heads.relation.box_feature_extractor, model.roi_heads.relation.predictor.context_layer, model.roi_heads.relation.predictor.post_emb, model.roi_heads.relation.predictor.post_cat, )
         load_mapping = {}
+        if cfg.MODEL.ROI_RELATION_HEAD.PREDICT_USE_BIAS:
+            eval_modules = eval_modules + (model.roi_heads.relation.predictor.freq_bias.obj_baseline,)
+        if cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM!=cfg.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM:
+            eval_modules = eval_modules + (model.roi_heads.relation.predictor.up_dim,)
     # layers with higher learning rate
     fast_heads = []
     

@@ -697,11 +697,11 @@ class KnowledgeTransferPredictor(nn.Module):
         self.num_obj_cls = config.MODEL.ROI_BOX_HEAD.NUM_CLASSES
         self.num_rel_cls = config.MODEL.ROI_RELATION_HEAD.NUM_CLASSES
         self.use_bias = config.MODEL.ROI_RELATION_HEAD.PREDICT_USE_BIAS
-        self.feat_mode = config.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.FEAT_MODE 
+        # self.feat_mode = config.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.FEAT_MODE 
         self.transfer = config.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.KNOWLEDGE_TRANSFER
-        self.vis_record = config.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.VIS_RECORD
-        self.feature_loss = config.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.FEATURE_LOSS
-        self.feat_path = config.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.PRETRAINED_FEATURE_PATH
+        self.feat_record = False
+        self.feature_loss_weight = config.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.FEATURE_LOSS_WEIGHT
+        self.feat_path = config.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.INITIAL_FEATURE_PATH
         # self.source = config.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.KNOWLEDGE_SOURCE
         self.logger = logging.getLogger("maskrcnn_benchmark").getChild("predictor")
 
@@ -737,13 +737,8 @@ class KnowledgeTransferPredictor(nn.Module):
         self.post_cat = nn.Sequential(*[nn.Linear(self.hidden_dim * 2, self.pooling_dim),
                                         nn.ReLU(inplace=True),])
 
-        if self.feat_mode == "concat":
-            assert self.use_bias
-            self.feat_dim = self.pooling_dim+self.num_rel_cls
-        elif self.feat_mode == "basic":
-            self.feat_dim = self.pooling_dim
-        else:
-            raise ValueError("Invalid feature extractor. Please select from 'concat' or 'basic'")
+        assert self.use_bias
+        self.feat_dim = self.pooling_dim+self.num_rel_cls
 
         self.first_compress = nn.Linear(self.feat_dim, self.num_rel_cls)
         if self.pooling_dim != config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM:
@@ -753,22 +748,12 @@ class KnowledgeTransferPredictor(nn.Module):
             self.union_single_not_match = False
 
         if self.transfer:
-            self.class_features = nn.Parameter(torch.zeros(self.num_rel_cls, self.feat_dim).to(torch.float), requires_grad=False)
+            self.class_features = nn.Parameter(torch.zeros(self.num_rel_cls, self.feat_dim).to(torch.float))
             if self.feat_path:
-                self.class_features = nn.Parameter(torch.from_numpy(np.load(self.feat_path, allow_pickle=True).item()["avg_feature"]).to(torch.float).cuda(), requires_grad=False)
-            if self.feature_loss != "none":
-                assert self.feature_loss=="mse" or self.feature_loss=="margin", "Please select 'mse' or 'margin' or 'none' for feature loss"
-                self.class_features.requires_grad = True
-                self.mseloss = nn.MSELoss()
-                if self.feature_loss == "margin":
-                    self.margin = 40.0
-                    self.weight = 1 if mode == "sgdet" else 0.1
+                self.class_features = nn.Parameter(torch.from_numpy(np.load(self.feat_path, allow_pickle=True).item()["avg_feature"]).to(torch.float).cuda())
+                self.margin = 40.0
 
             self.final_compress = nn.Linear(self.feat_dim, self.num_rel_cls)
-
-            # if self.source != ():
-            #     pred2idx = {"and": 5, "says": 39, "belonging to": 9, "over": 33, "parked on": 35, "growing on": 18, "standing on": 41, "made of": 27, "attached to": 7, "at": 6, "in": 22, "hanging from": 19, "wears": 49, "in front of": 23, "from": 17, "for": 16, "watching": 47, "lying on": 26, "to": 42, "behind": 8, "flying in": 15, "looking at": 25, "on back of": 32, "holding": 21, "between": 10, "laying on": 24, "riding": 38, "has": 20, "across": 2, "wearing": 48, "walking on": 46, "eating": 14, "above": 1, "part of": 36, "walking in": 45, "sitting on": 40, "under": 43, "covered in": 12, "carrying": 11, "using": 44, "along": 4, "with": 50, "on": 31, "covering": 13, "of": 30, "against": 3, "playing": 37, "near": 29, "painted on": 34, "mounted on": 28}
-            #     self.source_list = np.array(list(map(lambda x: pred2idx[x], list(self.source))), dtype=int)
 
             # hyperparameter for calibration
             self.alpha = config.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.CALIBRATION_ALPHA
@@ -779,12 +764,6 @@ class KnowledgeTransferPredictor(nn.Module):
         # for object class embedding 
         if self.use_bias:
             self.freq_bias = FrequencyBias(config, statistics)
-
-        if self.vis_record:
-            assert get_world_size()==1
-            self.average_ratio = 0.3
-            with torch.no_grad():
-                self.vis = {"avg_feature": np.zeros((self.num_rel_cls, self.feat_dim))}
 
     def layer_initialize(self):
         layer_init(self.post_emb, 10.0 * (1.0 / self.hidden_dim) ** 0.5, mode="normal")
@@ -846,42 +825,29 @@ class KnowledgeTransferPredictor(nn.Module):
         if self.union_single_not_match:
             union_features = self.up_dim(union_features)
 
-        if self.feat_mode == "concat":
-            # concat [object contextual features + union features, object classes embedding]
-            feature = torch.cat([post_ctx_rep+union_features, freq_emb], dim=-1)
-            rel_dist = self.first_compress(feature)
-        elif self.feat_mode == "basic":
-            feature = post_ctx_rep*union_features
-            rel_dist = self.first_compress(feature)
-            if self.use_bias and (not self.transfer):
-                rel_dist = rel_dist + freq_emb
+        # Original feature calculation
+        # concat [object contextual features + union features, object classes embedding]
+        feature = torch.cat([post_ctx_rep+union_features, freq_emb], dim=-1)
+        rel_dist = self.first_compress(feature)
         
         final_dist_list = rel_dist.split(num_rels, dim=0)
 
-        if self.vis_record:
+        if self.feat_record:
             self.feature_record(feature, rel_labels)
             return None, None, {}
 
         if self.transfer:  
             p = F.softmax(rel_dist, -1)
-            ###### you select specific knowledge source #######
-            # if self.source != ():
-            #     knowledge = torch.matmul(F.softmax(p[:,self.source_list], -1), self.class_features.detach()[self.source_list])
-            # else:
             ###### knowledge calculation ######
             knowledge = torch.matmul(p, self.class_features.detach())
             ###### refine feature ######
-            # attention selector --------------------------------
+            # attention calculation
             attention = torch.clamp(torch.tanh(feature+knowledge), min=0)
             refined_feature = feature + attention*knowledge
-            # ---------------------------------------------------
-
             # long tail feature calibration
             max_score, _ = p.max(dim=1)
             refined_feature = self.alpha*torch.mul(max_score.view(-1, 1), refined_feature)
             final_dist = self.final_compress(refined_feature)
-            if self.feat_mode=="basic" and self.use_bias:
-                final_dist = final_dist + freq_emb
             final_dist_list = final_dist.split(num_rels, dim=0)
 
         # TODO code for vstree binary loss
@@ -892,34 +858,25 @@ class KnowledgeTransferPredictor(nn.Module):
                 add_losses["first prediction"] = F.cross_entropy(rel_dist, rel_labels)
 
                 feature_detached = feature.detach()
-                if self.feature_loss == "mse":
-                    add_losses["feature"] = self.mseloss(self.class_features[rel_labels], feature_detached)
                 
-                elif self.feature_loss == "margin":
-                    batch_size = feature_detached.size(0)
-                    # attract loss
-                    counts = feature_detached.new_ones(self.num_rel_cls)
-                    counts = counts.scatter_add_(0, rel_labels, counts.new_ones(batch_size))
-                    class_feature_batch = self.class_features.index_select(0,rel_labels).to(feature_detached.dtype)
-                    diff = (feature_detached - class_feature_batch).pow(2)/2
-                    div = counts.index_select(0, rel_labels)
-                    diff /= div.view(-1,1)
-                    add_losses["feature attract loss"] = self.weight*diff.sum()/batch_size
-                    # repel loss
-                    dist_mat = torch.cdist(feature_detached, self.class_features.to(feature_detached.dtype))
-                    classes = torch.arange(self.num_rel_cls).long().cuda()
-                    labels_expand = rel_labels.unsqueeze(1).expand(batch_size, self.num_rel_cls)
-                    mask = labels_expand.ne(classes.expand(batch_size, self.num_rel_cls)).int()
-                    distmat_neg = torch.mul(dist_mat, mask)
-                    # original attract:repel = 1:0.01
-                    add_losses["feature repel loss"] = self.weight*0.01*torch.clamp(self.margin - distmat_neg.sum()/(batch_size*self.num_rel_cls), 0.0, 1e6)
+                batch_size = feature_detached.size(0)
+                # attract loss
+                counts = feature_detached.new_ones(self.num_rel_cls)
+                counts = counts.scatter_add_(0, rel_labels, counts.new_ones(batch_size))
+                class_feature_batch = self.class_features.index_select(0,rel_labels).to(feature_detached.dtype)
+                diff = (feature_detached - class_feature_batch).pow(2)/2
+                div = counts.index_select(0, rel_labels)
+                diff /= div.view(-1,1)
+                add_losses["feature attract loss"] = self.feature_loss_weight*diff.sum()/batch_size
+                # repel loss
+                dist_mat = torch.cdist(feature_detached, self.class_features.to(feature_detached.dtype))
+                classes = torch.arange(self.num_rel_cls).long().cuda()
+                labels_expand = rel_labels.unsqueeze(1).expand(batch_size, self.num_rel_cls)
+                mask = labels_expand.ne(classes.expand(batch_size, self.num_rel_cls)).int()
+                distmat_neg = torch.mul(dist_mat, mask)
+                # original attract:repel = 1:0.01
+                add_losses["feature repel loss"] = self.feature_loss_weight*0.01*torch.clamp(self.margin - distmat_neg.sum()/(batch_size*self.num_rel_cls), 0.0, 1e6)
             
-                elif self.feature_loss=="none":
-                    # moving average
-                    with torch.no_grad():
-                        for i in range(self.num_rel_cls):
-                            if len(feature_detached[rel_labels==i]):
-                                self.class_features[i] = 0.3*self.class_features[i]+0.7*(feature_detached[rel_labels==i]).mean(dim=0)
 
             # binary loss for VCTree
             if binary_preds is not None:
@@ -936,10 +893,10 @@ class KnowledgeTransferPredictor(nn.Module):
         Update feature mean, sum, squared sum
         """
         rel_labels = cat(rel_labels, dim=0).to('cpu').numpy()
-        feat = feature.detach().to('cpu').numpy()
+        feature_detached = feature.detach().to('cpu').numpy()
         for i in range(self.num_rel_cls):
-            if len(feat[rel_labels==i]):
-                self.vis["avg_feature"][i] = self.average_ratio*self.vis["avg_feature"][i]+(1-self.average_ratio)*(feat[rel_labels==i]).mean(axis=0)
+            if len(feature_detached[rel_labels==i]):
+                self.feat["avg_feature"][i] = 0.3*self.feat["avg_feature"][i]+0.7*(feature_detached[rel_labels==i]).mean(axis=0)
 
 @registry.ROI_RELATION_PREDICTOR.register("PSKTPredictor")
 class PSKTPredictor(nn.Module):
@@ -947,11 +904,10 @@ class PSKTPredictor(nn.Module):
         super(PSKTPredictor, self).__init__()
         self.num_obj_cls = config.MODEL.ROI_BOX_HEAD.NUM_CLASSES
         self.num_rel_cls = config.MODEL.ROI_RELATION_HEAD.NUM_CLASSES
-        self.feat_mode = config.MODEL.ROI_RELATION_HEAD.PSKT.FEAT_MODE 
         self.use_bias = config.MODEL.ROI_RELATION_HEAD.PREDICT_USE_BIAS
         self.transfer = config.MODEL.ROI_RELATION_HEAD.PSKT.KNOWLEDGE_TRANSFER
-        self.feat_path = config.MODEL.ROI_RELATION_HEAD.PSKT.PRETRAINED_FEATURE_PATH
-        self.feature_loss = config.MODEL.ROI_RELATION_HEAD.PSKT.FEATURE_LOSS
+        self.feature_loss_weight = config.MODEL.ROI_RELATION_HEAD.PSKT.FEATURE_LOSS_WEIGHT
+        self.feat_path = config.MODEL.ROI_RELATION_HEAD.PSKT.INITIAL_FEATURE_PATH
         self.logger = logging.getLogger("maskrcnn_benchmark").getChild("predictor")
 
         if config.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
@@ -972,9 +928,6 @@ class PSKTPredictor(nn.Module):
         self.num_children = self.T["num_children"]
         self.children_idxs = self.T["children"]
         self.children_tree_index = self.T["children_tree_index"]
-
-        # # ignore "on"
-        # self.is_ancestor_mat[:,31] = 0
 
         assert in_channels is not None 
 
@@ -999,13 +952,9 @@ class PSKTPredictor(nn.Module):
         self.post_emb = nn.Linear(self.hidden_dim, self.hidden_dim * 2)
         self.post_cat = nn.Sequential(*[nn.Linear(self.hidden_dim * 2, self.pooling_dim),
                                         nn.ReLU(inplace=True),])
-        if self.feat_mode == "concat":
-            assert self.use_bias
-            self.feat_dim = self.pooling_dim+self.num_rel_cls
-        elif self.feat_mode == "basic":
-            self.feat_dim = self.pooling_dim
-        else:
-            raise ValueError(f"{self.feat_mode} is invalid feature mode. Please select from 'concat' or 'basic'")
+
+        assert self.use_bias
+        self.feat_dim = self.pooling_dim+self.num_rel_cls
 
         self.first_compress = nn.ModuleList(nn.Linear(self.feat_dim, num) for num in self.num_children)
 
@@ -1016,16 +965,10 @@ class PSKTPredictor(nn.Module):
             self.union_single_not_match = False
 
         if self.transfer:
-            self.class_features = nn.Parameter(torch.zeros(self.num_rel_cls, self.feat_dim).to(torch.float), requires_grad=False)
+            self.class_features = nn.Parameter(torch.zeros(self.num_rel_cls, self.feat_dim).to(torch.float))
             if self.feat_path:
-                self.class_features = nn.Parameter(torch.from_numpy(np.load(self.feat_path, allow_pickle=True).item()["avg_feature"]).to(torch.float).cuda(), requires_grad=False)
-            if self.feature_loss != "none":
-                assert self.feature_loss=="mse" or self.feature_loss=="margin", "Please select 'mse' or 'margin' or 'none' for feature loss"
-                self.class_features.requires_grad = True
-                self.mseloss = nn.MSELoss()
-                if self.feature_loss == "margin":
-                    self.margin = 40.0
-                    self.weight = 1 if mode == "sgdet" else 0.1
+                self.class_features = nn.Parameter(torch.from_numpy(np.load(self.feat_path, allow_pickle=True).item()["avg_feature"]).to(torch.float).cuda())
+                self.margin = 40.0
 
             self.final_compress = nn.ModuleList(nn.Linear(self.feat_dim, num) for num in self.num_children)
             #for calibration
@@ -1035,8 +978,6 @@ class PSKTPredictor(nn.Module):
         # for object class embedding 
         if self.use_bias:
             self.freq_bias = FrequencyBias(config, statistics)
-            if "basic" in self.feat_mode:
-                self.freq_compress = nn.ModuleList(nn.Linear(self.num_rel_cls, num) for num in self.num_children)
         
         self.layer_initialize()
 
@@ -1050,8 +991,6 @@ class PSKTPredictor(nn.Module):
             layer_init(self.first_compress[i], mode="xavier")
             if self.transfer:
                 layer_init(self.final_compress[i], mode="xavier")
-            if "basic" in self.feat_mode:
-                layer_init(self.freq_compress[i], mode="xavier")
             
 
     def pair_feature_generate(self, roi_features, proposals, rel_pair_idxs, num_objs, obj_boxs, logger, ctx_average=False):
@@ -1092,7 +1031,7 @@ class PSKTPredictor(nn.Module):
         first_dist = self.first_compress[tree_index](feature)
         if not self.transfer:
             return first_dist, None
-        # case: no kt in root -------------------
+        # no kt in root -------------------------
         if tree_index == 0:
             return first_dist, first_dist
         # ---------------------------------------
@@ -1104,12 +1043,11 @@ class PSKTPredictor(nn.Module):
         parent_feature = parent_feature/div_n.view(-1,1)
         knowledge = torch.matmul(p, parent_feature)
         #### refine feature ####
-        # attention selector -----------------------------------------
+        # attention 
         attention = torch.clamp(torch.tanh(feature+knowledge), min=0)
         refined_feature = feature + attention*knowledge
-        #-------------------------------------------------------------
 
-        #### feature calibration ####
+        # feature calibration 
         refined_feature = self.alpha*torch.mul(max_score.view(-1,1), refined_feature)
         final_dist = self.final_compress[tree_index](refined_feature)
         return first_dist, final_dist
@@ -1132,38 +1070,18 @@ class PSKTPredictor(nn.Module):
 
         if self.union_single_not_match:
             union_features = self.up_dim(union_features)
-        if self.feat_mode == "concat":
-            feature = torch.cat([post_ctx_rep+union_features, freq_emb], dim=-1)
-        elif self.feat_mode == "basic":
-            feature = post_ctx_rep * union_features
+
+        # Original feature calculation
+        # concat [object contextual features + union features, object classes embedding]
+        feature = torch.cat([post_ctx_rep+union_features, freq_emb], dim=-1)
 
         first_dists = []
         final_dists = []
 
         for i in range(self.num_tree):
             first_dist, final_dist = self.knowledge_transfer(feature, i)
-            if (not self.transfer) and ("basic" in self.feat_mode) and self.use_bias and i!=0:
-                # # freq info selector
-                first_dist = first_dist + self.freq_compress[i](freq_emb)
-                # freq info extraction
-                # --- if you apply it to root ----
-                # anc_mat = self.is_ancestor_mat[self.children_idxs[i]]
-                # anc_mat /= torch.sum(anc_mat, dim=1).view(-1,1)
-                # final_dist = final_dist + torch.matmul(freq_emb, torch.t(anc_mat))
-                # --- else ----
-                # first_dist = first_dist + torch.matmul(freq_emb, torch.t(self.is_ancestor_mat[self.children_idxs[i]]))
             first_dists.append(first_dist)
             if self.transfer:
-                if ("basic" in self.feat_mode) and self.use_bias and i!=0:
-                    # # freq info selector 
-                    final_dist = final_dist + self.freq_compress[i](freq_emb)
-                    # freq info extraction 
-                    # --- if you apply it to root ----
-                    # anc_mat = self.is_ancestor_mat[self.children_idxs[i]]
-                    # anc_mat /= torch.sum(anc_mat, dim=1).view(-1,1)
-                    # final_dist = final_dist + torch.matmul(freq_emb, torch.t(anc_mat))
-                    # --- else ----
-                    # final_dist = final_dist + torch.matmul(freq_emb, torch.t(self.is_ancestor_mat[self.children_idxs[i]])) #階層分類だと平均とる必要あり, クラスター選択タイプならいらない
                 final_dists.append(final_dist)
 
         if self.transfer:
@@ -1177,35 +1095,25 @@ class PSKTPredictor(nn.Module):
             if self.transfer:
                 rel_labels = cat(rel_labels, dim=0)
                 feature_detached = feature.detach()
-                if self.feature_loss == "mse":
-                    add_losses["feature"] = self.mseloss(self.class_features[rel_labels], feature_detached)
-                
-                elif self.feature_loss == "margin":
-                    batch_size = feature_detached.size(0)
-                    # attract loss
-                    counts = feature_detached.new_ones(self.num_rel_cls)
-                    counts = counts.scatter_add_(0, rel_labels, counts.new_ones(batch_size))
-                    class_feature_batch = self.class_features.index_select(0,rel_labels).to(feature_detached.dtype)
-                    diff = (feature_detached - class_feature_batch).pow(2)/2
-                    div = counts.index_select(0, rel_labels)
-                    diff /= div.view(-1,1)
-                    add_losses["feature attract loss"] = self.weight*diff.sum()/batch_size
-                    # repel loss
-                    dist_mat = torch.cdist(feature_detached, self.class_features.to(feature_detached.dtype))
-                    classes = torch.arange(self.num_rel_cls).long().cuda()
-                    labels_expand = rel_labels.unsqueeze(1).expand(batch_size, self.num_rel_cls)
-                    mask = labels_expand.ne(classes.expand(batch_size, self.num_rel_cls)).int()
-                    distmat_neg = torch.mul(dist_mat, mask)
-                    # original attract:repel = 1:0.01
-                    add_losses["feature repel loss"] = self.weight*0.01*torch.clamp(self.margin - distmat_neg.sum()/(batch_size*self.num_rel_cls), 0.0, 1e6)
-                
-                elif self.feature_loss=="none":
-                    # moving average
-                    with torch.no_grad():
-                        for i in range(self.num_rel_cls):
-                            if len(feature_detached[rel_labels==i]):
-                                self.class_features[i] = 0.3*self.class_features[i]+0.7*(feature_detached[rel_labels==i]).mean(dim=0)
 
+                batch_size = feature_detached.size(0)
+                # attract loss
+                counts = feature_detached.new_ones(self.num_rel_cls)
+                counts = counts.scatter_add_(0, rel_labels, counts.new_ones(batch_size))
+                class_feature_batch = self.class_features.index_select(0,rel_labels).to(feature_detached.dtype)
+                diff = (feature_detached - class_feature_batch).pow(2)/2
+                div = counts.index_select(0, rel_labels)
+                diff /= div.view(-1,1)
+                add_losses["feature attract loss"] = self.feature_loss_weight*diff.sum()/batch_size
+                # repel loss
+                dist_mat = torch.cdist(feature_detached, self.class_features.to(feature_detached.dtype))
+                classes = torch.arange(self.num_rel_cls).long().cuda()
+                labels_expand = rel_labels.unsqueeze(1).expand(batch_size, self.num_rel_cls)
+                mask = labels_expand.ne(classes.expand(batch_size, self.num_rel_cls)).int()
+                distmat_neg = torch.mul(dist_mat, mask)
+                # original attract:repel = 1:0.01
+                add_losses["feature repel loss"] = self.feature_loss_weight*0.01*torch.clamp(self.margin - distmat_neg.sum()/(batch_size*self.num_rel_cls), 0.0, 1e6)
+                
                 # rel_labels for each cluster
                 rel_label_chs = []
                 for i in range(self.num_tree):
