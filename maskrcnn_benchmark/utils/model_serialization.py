@@ -60,6 +60,9 @@ def align_and_update_state_dicts(model_state_dict, loaded_state_dict, load_mappi
         key_old = loaded_keys[idx_old]
         if model_state_dict[key].size()==loaded_state_dict[key_old].size():
             model_state_dict[key] = loaded_state_dict[key_old]
+        else:
+            logger.info("SIZE MISMATCH of current module <{}> of shape {} and loaded module <{}> of shape {}".format(key, 
+                                    tuple(model_state_dict[key].shape), key_old, tuple(loaded_state_dict[key_old].shape)))
         # add a control gate for this logger (it's too large)
         if ((not key.startswith('module.'))  and key != key_old) or (key.startswith('module.') and key[7:] != key_old):
             logger.info(

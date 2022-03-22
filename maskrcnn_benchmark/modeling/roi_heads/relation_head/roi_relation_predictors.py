@@ -2094,11 +2094,11 @@ class CausalPSKTPredictor(nn.Module):
                     if self.num_tree>1 and i==0:
                         continue
                     avg_ctx_dist = self.ctx_first_compress[i](avg_ctx_rep)
-                    # include kt bias in avg_ctx_dist ----------------------
-                    if self.transfer: 
-                        refined_avg_ctx_rep = self.refine_feature(avg_ctx_rep, avg_ctx_dist, self.class_ctx_features.detach(), i)
-                        avg_ctx_dist = self.ctx_final_compress[i](refined_avg_ctx_rep)
-                    # -------------------------------------------------------
+                    # # include kt bias in avg_ctx_dist ----------------------
+                    # if self.transfer: 
+                    #     refined_avg_ctx_rep = self.refine_feature(avg_ctx_rep, avg_ctx_dist, self.class_ctx_features.detach(), i)
+                    #     avg_ctx_dist = self.ctx_final_compress[i](refined_avg_ctx_rep)
+                    # # -------------------------------------------------------
                     if self.effect_type == 'TDE':   # TDE of CTX
                         if self.transfer:
                             final_dists[i] = (vis_final_dists[i]+ctx_final_dists[i]+frq_dists[i]) - (vis_final_dists[i]+avg_ctx_dist+frq_dists[i])
