@@ -86,7 +86,7 @@ With your basline checkpoint, run
 ```bash
 bash sh/motifs_train_kt.sh
 ```  
-+ ```MODEL.ROI_RELATION_HEAD.PSKT.TAXONOMY_PATH``` is used to set taxonomy path. Taxonomy can be manually constructed with [this code] from [average feature data](datasets/vg/initial_feature), but we already prepared the taxonomy for the data in [this folder](datasets/vg/taxonomy). 
++ ```MODEL.ROI_RELATION_HEAD.PSKT.TAXONOMY_PATH``` is used to set taxonomy path. Taxonomy can be manually constructed with [this code](analysis/clustering.ipynb) from [average feature data](datasets/vg/initial_feature), but we already prepared the taxonomy for the data in [this folder](datasets/vg/taxonomy). 
 
 Other options are same as the options with same name for ```KnowledgeTransferPredictor```, so refer the section above.  
 
