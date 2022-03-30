@@ -2043,9 +2043,9 @@ class CausalPSKTPredictor(nn.Module):
                 rel_label_chs.append(rel_label_ch)
             
             # branch constraint: make sure each branch can predict independently
-            add_losses['auxiliary_ctx'] = torch.zeros([1]).cuda()
-            add_losses['auxiliary_vis'] = torch.zeros([1]).cuda()
-            add_losses['auxiliary_frq'] = torch.zeros([1]).cuda()
+            add_losses['auxiliary_ctx'] = torch.zeros([1])[0].cuda()
+            add_losses['auxiliary_vis'] = torch.zeros([1])[0].cuda()
+            add_losses['auxiliary_frq'] = torch.zeros([1])[0].cuda()
             div_n = 0
             for i in range(self.num_tree):
                 if (rel_label_chs[i]>=0).sum()>0:
@@ -2137,24 +2137,21 @@ class CausalPSKTPredictor(nn.Module):
         Update feature mean, sum, squared sum
         """
         rel_labels = cat(rel_labels, dim=0).to('cpu').numpy()
-        # ctx_rep = ctx_rep.detach().to('cpu').numpy()
-        # vis_rep = vis_rep.detach().to('cpu').numpy()
-        # frq_dist = frq_dist.detach().to('cpu').numpy()
-        # for i in range(self.num_rel_cls):
-        #     if len(ctx_rep[rel_labels==i]):
-        #         self.ctx["avg_feature"][i] = 0.3*self.ctx["avg_feature"][i]+0.7*(ctx_rep[rel_labels==i]).mean(axis=0)
-        #         self.vis["avg_feature"][i] = 0.3*self.vis["avg_feature"][i]+0.7*(vis_rep[rel_labels==i]).mean(axis=0)
-        #         self.frq["avg_feature"][i] = 0.3*self.frq["avg_feature"][i]+0.7*(frq_dist[rel_labels==i]).mean(axis=0)
-
-        # 特徴量でなく、分類結果もrecord
+        # 特徴量だけでなく、分類結果もrecord
         with torch.no_grad():
             vis_dist = self.vis_first_compress[0](vis_rep)
             ctx_dist = self.ctx_first_compress[0](ctx_rep)
             rel_dist = ctx_dist + vis_dist + frq_dist
             rel_dist = rel_dist.detach().to('cpu').numpy()
+            ctx_rep = ctx_rep.detach().to('cpu').numpy()
+            vis_rep = vis_rep.detach().to('cpu').numpy()
+            frq_dist = frq_dist.detach().to('cpu').numpy()
             for i in range(self.num_rel_cls):
                 if len(rel_dist[rel_labels==i]):
                     self.rel["avg_feature"][i] = 0.3*self.rel["avg_feature"][i]+0.7*(rel_dist[rel_labels==i]).mean(axis=0)
+                    self.ctx["avg_feature"][i] = 0.3*self.ctx["avg_feature"][i]+0.7*(ctx_rep[rel_labels==i]).mean(axis=0)
+                    self.vis["avg_feature"][i] = 0.3*self.vis["avg_feature"][i]+0.7*(vis_rep[rel_labels==i]).mean(axis=0)
+                    self.frq["avg_feature"][i] = 0.3*self.frq["avg_feature"][i]+0.7*(frq_dist[rel_labels==i]).mean(axis=0)
 
 
 def make_roi_relation_predictor(cfg, in_channels, taxonomy=None):
