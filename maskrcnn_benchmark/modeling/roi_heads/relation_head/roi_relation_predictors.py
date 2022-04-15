@@ -1754,6 +1754,7 @@ class CausalPSKTPredictor(nn.Module):
         self.vis_feat_path = config.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.PRETRAINED_VIS_FEATURE_PATH
         self.effect_type = config.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.EFFECT_TYPE
         self.vis_record = False
+        self.bias_record = False
 
         if config.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
             if config.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL:
@@ -2101,6 +2102,9 @@ class CausalPSKTPredictor(nn.Module):
                     # # -------------------------------------------------------
                     if self.effect_type == 'TDE':   # TDE of CTX
                         if self.transfer:
+                            if self.bias_record:
+                                self.bias_logit_record(vis_final_dists[i]+avg_ctx_dist+frq_dists[i], rel_labels, i)
+                                continue
                             final_dists[i] = (vis_final_dists[i]+ctx_final_dists[i]+frq_dists[i]) - (vis_final_dists[i]+avg_ctx_dist+frq_dists[i])
                         else:
                             final_dists[i] = (vis_first_dists[i]+ctx_first_dists[i]+frq_dists[i]) - (vis_first_dists[i]+avg_ctx_dist+frq_dists[i])
@@ -2118,9 +2122,13 @@ class CausalPSKTPredictor(nn.Module):
                             final_dists[i] = (vis_final_dists[i]+ctx_final_dists[i]+frq_dists[i]) - (vis_final_dists[i]+avg_ctx_dist+avg_frq_dist_)
                         else:
                             final_dists[i] = (vis_first_dists[i]+ctx_first_dists[i]+frq_dists[i]) - (vis_first_dists[i]+avg_ctx_dist+avg_frq_dist_)
+                if self.bias_record:
+                    return None, None, {}
             else:
                 assert self.effect_type == 'none'
                 pass
+
+                
 
         final_dist_list = [final_dist.split(num_rels, dim=0) for final_dist in final_dists]
 
@@ -2152,6 +2160,13 @@ class CausalPSKTPredictor(nn.Module):
                     self.ctx["avg_feature"][i] = 0.3*self.ctx["avg_feature"][i]+0.7*(ctx_rep[rel_labels==i]).mean(axis=0)
                     self.vis["avg_feature"][i] = 0.3*self.vis["avg_feature"][i]+0.7*(vis_rep[rel_labels==i]).mean(axis=0)
                     self.frq["avg_feature"][i] = 0.3*self.frq["avg_feature"][i]+0.7*(frq_dist[rel_labels==i]).mean(axis=0)
+
+    def bias_logit_record(self, bias, rel_labels, tree_idx):
+        rel_labels = cat(rel_labels, dim=0).to('cpu').numpy()
+        bias = bias.clone().to("cpu").numpy()
+        for ch_i,i in enumerate(self.children_idxs[tree_idx]):
+            if len(bias[rel_labels==i]):
+                self.bias[tree_idx][ch_i] = 0.3*self.bias[tree_idx][ch_i] + 0.7*(bias[rel_labels==i]).mean(axis=0)
 
 
 def make_roi_relation_predictor(cfg, in_channels, taxonomy=None):
