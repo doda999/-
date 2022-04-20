@@ -91,7 +91,7 @@ bash sh/motifs_train_kt.sh
 Other options are same as the options with same name for ```KnowledgeTransferPredictor```, so refer the section above.  
 
 ```MODEL.ROI_RELATION_HEAD.FINETUNE_FOR_RELATION``` should be True, but if you want to train whole model jointly (it's not our implementation), you can turn it to False.   
-if ```MODEL.ROI_RELATION_HEAD.FINETUNE_FOR_RELATION``` is True, you can apply knowledge transfer in addition to the taxonomy based on predicate similarities. 
+
 </details>
 <br />
 
