@@ -13,5 +13,5 @@ MODEL.ROI_RELATION_HEAD.CAUSALPSKT.EFFECT_ANALYSIS True \
 MODEL.ROI_RELATION_HEAD.CAUSALPSKT.EFFECT_TYPE TDE \
 TEST.IMS_PER_BATCH 1 \
 DTYPE "float16" \
-OUTPUT_DIR [path to the drector including your model] \
+OUTPUT_DIR [path to the directory including your model] \
 MODEL.ROI_RELATION_HEAD.CAUSALPSKT.TAXONOMY_PATH [path to taxonomy file]
