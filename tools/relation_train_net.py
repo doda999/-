@@ -59,13 +59,9 @@ def train(cfg, local_rank, distributed, logger):
     eval_modules = (model.rpn, model.backbone, model.roi_heads.box, )
     load_mapping = {"roi_heads.relation.box_feature_extractor" : "roi_heads.box.feature_extractor",
                     "roi_heads.relation.union_feature_extractor.feature_extractor" : "roi_heads.box.feature_extractor",}
-    if (cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR == "KnowledgeTransferPredictor" and cfg.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.KNOWLEDGE_TRANSFER == True) or \
-        "PSKT" in cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR and cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR!="CausalPSKTPredictor" or \
-        cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR=="CausalPSKTPredictor" and cfg.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.FINETUNE_FOR_RELATION: \
+    if cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR=="CausalPSKTPredictor" and cfg.MODEL.ROI_RELATION_HEAD.CAUSALPSKT.FINETUNE_FOR_RELATION: 
         # fix pretrained baseline
-        eval_modules = (model.rpn, model.backbone, model.roi_heads.box, model.roi_heads.relation.union_feature_extractor, model.roi_heads.relation.box_feature_extractor, model.roi_heads.relation.predictor.context_layer, model.roi_heads.relation.predictor.post_emb, model.roi_heads.relation.predictor.post_cat, model.roi_heads.relation.predictor.freq_bias.obj_baseline)
-        if cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR=="CausalPSKTPredictor":
-            eval_modules = eval_modules + (model.roi_heads.relation.predictor.spt_emb, )
+        eval_modules = (model.rpn, model.backbone, model.roi_heads.box, model.roi_heads.relation.union_feature_extractor, model.roi_heads.relation.box_feature_extractor, model.roi_heads.relation.predictor.context_layer, model.roi_heads.relation.predictor.post_emb, model.roi_heads.relation.predictor.post_cat, model.roi_heads.relation.predictor.freq_bias.obj_baseline, model.roi_heads.relation.predictor.spt_emb, )
         load_mapping = {}
     # layers with higher learning rate
     fast_heads = []

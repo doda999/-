@@ -72,10 +72,6 @@ MODEL:
     #PREDICTOR: "VCTreePredictor"
     #PREDICTOR: "TransformerPredictor"
     # PREDICTOR: "CausalAnalysisPredictor"
-    # PREDICTOR: "HierarchicalCausalPredictor"
-    # PREDICTOR: "KnowledgeTransferPredictor"
-    # PREDICTOR: "PSKTPredictor"
-    # PREDICTOR: "PSKTAllPredictor"
     PREDICTOR: "CausalPSKTPredictor"
     ################# Parameters for Motif Predictor ##################
     CONTEXT_OBJ_LAYER: 1
@@ -89,38 +85,12 @@ MODEL:
       CONTEXT_LAYER: "motifs"         # candicates: motifs, vctree, vtranse
       SPATIAL_FOR_VISION: True
       EFFECT_ANALYSIS: False
-    ############# Parameters for Knowledge Transfer Predictor ##############
-    KNOWLEDGETRANS:
-      CONTEXT_LAYER: 'motifs'         # candicates: motifs, vctree, vtranse
-      FEAT_MODE: 'concat'           # candidates: concat, sum, basic, vis_concat, ctx_concat
-      KNOWLEDGE_TRANSFER: True
-      CALIBRATION_ALPHA: 10.0
-      # VIS_RECORD: False
-      FEATURE_LOSS: "margin"
-      # KNOWLEDGE_SOURCE: ("on", "has", "in", "of", "wearing", "near", "with", "above", "holding", "behind", "under", "sitting on", "wears", "standing on", "in front of", "attached to", "at", "hanging from", "over", "for", "riding", "carrying", "eating", "walking on", "playing", "covering", "laying on", "along", "watching", "and", "between", "belonging to", "painted on", "against", "looking at") #if you want to use all predicates' feature, just put ()
-    ############# Parameters for Predicate Similarity used Knowledge Transfer Predictor ##############
-    PSKT:
-      CONTEXT_LAYER: 'motifs'         # candicates: motifs, vctree, vtranse
-      FEAT_MODE: 'concat'           # candidates: concat, sum, basic, vis_concat, ctx_concat
-      TAXONOMY_PATH: "datasets/vg/sgdet_clusters/motifs/2cluster.json"
-      CALIBRATION_ALPHA: 10.0
-      KNOWLEDGE_TRANSFER: True
-      FEATURE_LOSS: "margin"   
-    ############# Parameters for Predicate Similarity used Knowledge Transfer(for all labels) Predictor ##############
-    PSKTALL:
-      CONTEXT_LAYER: 'motifs'         # candicates: motifs, vctree, vtranse
-      FEAT_MODE: 'concat'           # candidates: concat, sum, basic, vis_concat, ctx_concat
-      TAXONOMY_PATH: "datasets/vg/sgdet_clusters/motifs/2cluster.json"
-      CALIBRATION_ALPHA: 10.0
-      KNOWLEDGE_TRANSFER: True
-      FEATURE_LOSS: "margin"  
     ############# Parameters for Predicate Similarity used Knowledge Transfer (with causal analysis) Predictor ##############
     CAUSALPSKT:
       CONTEXT_LAYER: 'motifs'         # candicates: motifs, vctree, vtranse
-      TAXONOMY_PATH: "datasets/vg/flat.json"
+      TAXONOMY_PATH: "datasets/vg/taxonomy/flat.json"
       CALIBRATION_ALPHA: 10.0
       KNOWLEDGE_TRANSFER: False
-      FEATURE_LOSS: "margin"  
       FEATURE_LOSS_WEIGHT: 1.0
       SEPARATE_SPATIAL: False         # separate spatial in union feature
       SPATIAL_FOR_VISION: True

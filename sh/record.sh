@@ -1,0 +1,12 @@
+CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.launch --master_port 10026 --nproc_per_node=1 \
+tools/record.py \
+--config-file "configs/e2e_relation_X_101_32_8_FPN_1x.yaml" \
+MODEL.ROI_RELATION_HEAD.USE_GT_BOX True \
+MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL False \
+MODEL.ROI_RELATION_HEAD.PREDICTOR  CausalPSKTPredictor \
+MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM  512 \
+MODEL.ROI_RELATION_HEAD.CAUSALPSKT.CONTEXT_LAYER motifs \
+MODEL.ROI_RELATION_HEAD.CAUSALPSKT.KNOWLEDGE_TRANSFER False \
+TEST.IMS_PER_BATCH 1 \
+OUTPUT_DIR [path to the director including your path] \
+MODEL.ROI_RELATION_HEAD.CAUSALPSKT.TAXONOMY_PATH datasets/vg/taxonomy/flat.json 

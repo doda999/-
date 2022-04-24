@@ -1,6 +1,0 @@
-{
-    "children":{"root":["parent1", "parent2"],
-        "parent1":["across" ,"against" ,"along" ,"and" ,"behind" ,"between" ,"carrying" ,"covered in" ,"covering" ,"eating" ,"from" ,"has" ,"holding" ,"in" ,"in front of" ,"looking at" ,"made of" ,"near" ,"over" ,"playing" ,"says" ,"standing on" ,"under" ,"using" ,"watching" ,"wearing" ,"wears" ,"with"],
-        "parent2":["above" ,"at" ,"attached to" ,"belonging to" ,"flying in" ,"for" ,"growing on" ,"hanging from" ,"laying on" ,"lying on" ,"mounted on" ,"of" ,"on" ,"on back of" ,"painted on" ,"parked on" ,"part of" ,"riding" ,"sitting on" ,"to" ,"walking in" ,"walking on"]
-    }
-}

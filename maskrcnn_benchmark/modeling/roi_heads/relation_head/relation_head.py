@@ -41,8 +41,7 @@ class ROIRelationHead(torch.nn.Module):
         self.post_processor = make_roi_relation_post_processor(cfg, taxonomy=taxonomy)
         self.loss_evaluator = make_roi_relation_loss_evaluator(cfg, taxonomy=taxonomy)
         self.samp_processor = make_roi_relation_samp_processor(cfg)
-        self.vis_record = False
-        self.bias_record = False
+        self.record = False
 
         # parameters
         self.use_union_box = self.cfg.MODEL.ROI_RELATION_HEAD.PREDICT_USE_VISION
@@ -61,7 +60,7 @@ class ROIRelationHead(torch.nn.Module):
             losses (dict[Tensor]): During training, returns the losses for the
                 head. During testing, returns an empty dict.
         """
-        if self.training or self.vis_record or self.bias_record:
+        if self.training or self.record:
             # relation subsamples and assign ground truth label during training
             with torch.no_grad():
                 if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
@@ -89,7 +88,7 @@ class ROIRelationHead(torch.nn.Module):
         refine_logits, relation_logits, add_losses = self.predictor(proposals, rel_pair_idxs, rel_labels, rel_binarys, roi_features, union_features, logger)
 
         # just for feature record
-        if self.vis_record or self.bias_record:
+        if self.record:
             return None, None, {}
 
         # for test

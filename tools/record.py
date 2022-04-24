@@ -25,18 +25,14 @@ except ImportError:
 
 def record(model, data_loader, predictor, output_folder, device, timer=None, logger=None):
     # save file
-    if predictor=="KnowledgeTransferPredictor":
-        savefile = os.path.join(output_folder,"feat.npy")
-        model.roi_heads.relation.predictor.feat = {"avg_feature": np.zeros((model.roi_heads.relation.predictor.num_rel_cls, model.roi_heads.relation.predictor.feat_dim))}
-    elif predictor=="CausalPSKTPredictor":
-        vis_savefile = os.path.join(output_folder,"vis.npy")
-        ctx_savefile = os.path.join(output_folder,"ctx.npy")
-        frq_savefile = os.path.join(output_folder,"frq.npy")
-        rel_savefile = os.path.join(output_folder, "rel.npy")
-        model.roi_heads.relation.predictor.vis = {"avg_feature": np.zeros((model.roi_heads.relation.predictor.num_rel_cls, model.roi_heads.relation.predictor.pooling_dim))}
-        model.roi_heads.relation.predictor.ctx = {"avg_feature": np.zeros((model.roi_heads.relation.predictor.num_rel_cls, model.roi_heads.relation.predictor.pooling_dim))}
-        model.roi_heads.relation.predictor.frq = {"avg_feature": np.zeros((model.roi_heads.relation.predictor.num_rel_cls, model.roi_heads.relation.predictor.num_rel_cls))}
-        model.roi_heads.relation.predictor.rel = {"avg_feature": np.zeros((model.roi_heads.relation.predictor.num_rel_cls, model.roi_heads.relation.predictor.num_rel_cls))}
+    vis_savefile = os.path.join(output_folder,"vis.npy")
+    ctx_savefile = os.path.join(output_folder,"ctx.npy")
+    frq_savefile = os.path.join(output_folder,"frq.npy")
+    rel_savefile = os.path.join(output_folder, "rel.npy")
+    model.roi_heads.relation.predictor.vis = {"avg_feature": np.zeros((model.roi_heads.relation.predictor.num_rel_cls, model.roi_heads.relation.predictor.pooling_dim))}
+    model.roi_heads.relation.predictor.ctx = {"avg_feature": np.zeros((model.roi_heads.relation.predictor.num_rel_cls, model.roi_heads.relation.predictor.pooling_dim))}
+    model.roi_heads.relation.predictor.frq = {"avg_feature": np.zeros((model.roi_heads.relation.predictor.num_rel_cls, model.roi_heads.relation.predictor.num_rel_cls))}
+    model.roi_heads.relation.predictor.rel = {"avg_feature": np.zeros((model.roi_heads.relation.predictor.num_rel_cls, model.roi_heads.relation.predictor.num_rel_cls))}
 
     model.eval()
     cpu_device = torch.device("cpu")
@@ -53,13 +49,10 @@ def record(model, data_loader, predictor, output_folder, device, timer=None, log
                 if not cfg.MODEL.DEVICE == 'cpu':
                     torch.cuda.synchronize()
                 timer.toc()
-    if predictor=="KnowledgeTransferPredictor":
-        np.save(savefile, model.roi_heads.relation.predictor.feat)
-    elif predictor=="CausalPSKTPredictor":
-        np.save(vis_savefile, model.roi_heads.relation.predictor.vis)
-        np.save(ctx_savefile, model.roi_heads.relation.predictor.ctx)
-        np.save(frq_savefile, model.roi_heads.relation.predictor.frq)
-        np.save(rel_savefile, model.roi_heads.relation.predictor.rel)
+    np.save(vis_savefile, model.roi_heads.relation.predictor.vis)
+    np.save(ctx_savefile, model.roi_heads.relation.predictor.ctx)
+    np.save(frq_savefile, model.roi_heads.relation.predictor.frq)
+    np.save(rel_savefile, model.roi_heads.relation.predictor.rel)
     torch.cuda.empty_cache()
     return 
 
@@ -97,7 +90,7 @@ def main():
     cfg.TEST.IMS_PER_BATCH = 1
     cfg.freeze()
 
-    assert cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR=="CausalPSKTPredictor" or cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR=="KnowledgeTransferPredictor"
+    assert cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR=="CausalPSKTPredictor"
 
     output_dir = cfg.OUTPUT_DIR
     logger = setup_logger("maskrcnn_benchmark", output_dir, get_rank(), filename="visrecord_log.txt")
@@ -108,8 +101,8 @@ def main():
     logger.info("\n" + collect_env_info())
 
     model = build_detection_model(cfg)
-    model.roi_heads.relation.vis_record = True
-    model.roi_heads.relation.predictor.vis_record = True
+    model.roi_heads.relation.record = True
+    model.roi_heads.relation.predictor.record = True
     model.to(cfg.MODEL.DEVICE)
 
     # Initialize mixed-precision if necessary
@@ -130,7 +123,7 @@ def main():
         iou_types = iou_types + ("attributes", )
 
     if cfg.OUTPUT_DIR:
-        output_folder = os.path.join(cfg.OUTPUT_DIR, "vis_record")
+        output_folder = os.path.join(cfg.OUTPUT_DIR, "record")
         mkdir(output_folder)
 
     data_loader_train = make_data_loader(cfg, mode="train", is_distributed=distributed, record=True)[0]
