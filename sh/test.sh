@@ -22,5 +22,5 @@ MODEL.ROI_RELATION_HEAD.PSKT.CONTEXT_LAYER motifs \
 MODEL.ROI_RELATION_HEAD.PSKT.KNOWLEDGE_TRANSFER True \
 TEST.IMS_PER_BATCH 1 \
 DTYPE "float16" \
-OUTPUT_DIR /home/miskai/デスクトップ/related-work/scene-graph-benchmark/SGG-TD2/checkpoints/knowledgetrans-motifs-predcls-exmp-2cluster/RELU/concat_margin40_from_record_cls0.1 \
-MODEL.ROI_RELATION_HEAD.PSKT.TAXONOMY_PATH datasets/vg/predcls_clusters/motifs/2cluster.json 
+OUTPUT_DIR [path to the director including your model path] \
+MODEL.ROI_RELATION_HEAD.PSKT.TAXONOMY_PATH [path to your taxonomy]

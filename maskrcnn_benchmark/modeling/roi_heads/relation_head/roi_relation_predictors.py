@@ -1119,7 +1119,7 @@ class PSKTPredictor(nn.Module):
                 for i in range(self.num_tree):
                     rel_label_ch = self.global2children[i][rel_labels]
                     rel_label_chs.append(rel_label_ch) 
-                add_losses['first_prediction'] = torch.zeros([1]).cuda() # combined feature (ctx+union)
+                add_losses['first_prediction'] = torch.zeros([1])[0].cuda() # combined feature (ctx+union)
                 div_n = 0
                 for i in range(1, self.num_tree):
                     ####### CROSS ENTROPY LOSS FOR EACH TREE ########

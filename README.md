@@ -96,3 +96,6 @@ if ```MODEL.ROI_RELATION_HEAD.FINETUNE_FOR_RELATION``` is True, you can apply kn
 <br />
 
 **Note**: Since we are still working on improving the vctree based model, the result of our vctree model will be lower than baseline. Therefore, we recommend set ```MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.CONTEXT_LAYER``` or ```MODEL.ROI_RELATION_HEAD.PSKT.CONTEXT_LAYER``` to ```motifs```.
+
+## Evaluate
+To evaluate your model, run ```bash sh/test.sh```. Note that ```MODEL.ROI_RELATION_HEAD.PSKT.TAXONOMY_PATH``` should be the same as the taxonomy path you set in training.

@@ -15,9 +15,9 @@ SOLVER.IMS_PER_BATCH 12 TEST.IMS_PER_BATCH 1 \
 DTYPE "float16" \
 SOLVER.BASE_LR 0.001 \
 SOLVER.MAX_ITER 50000 SOLVER.VAL_PERIOD 2000 SOLVER.CHECKPOINT_PERIOD 2000 \
-MODEL.PRETRAINED_DETECTOR_CKPT /home/miskai/デスクトップ/related-work/scene-graph-benchmark/SGG-TD2/checkpoints/vctree-sgcls-exmp/relu-concat-less-lr0.001/model_0024000.pth \
-OUTPUT_DIR /home/miskai/デスクトップ/related-work/scene-graph-benchmark/SGG-PS/checkpoints/for_debug \
-MODEL.ROI_RELATION_HEAD.PSKT.TAXONOMY_PATH datasets/vg/sgcls_clusters/vctree/2cluster.json \
-MODEL.ROI_RELATION_HEAD.PSKT.PRETRAINED_FEATURE_PATH /home/miskai/デスクトップ/related-work/scene-graph-benchmark/SGG-TD2/checkpoints/vctree-sgcls-exmp/relu-concat-less-lr0.001/vis_record/vis.npy
+MODEL.PRETRAINED_DETECTOR_CKPT [path to your initial model ckpt] \
+OUTPUT_DIR [path to output directory] \
+MODEL.ROI_RELATION_HEAD.PSKT.TAXONOMY_PATH [path to taxonomy file] \
+MODEL.ROI_RELATION_HEAD.PSKT.PRETRAINED_FEATURE_PATH [path to average feature data file]
 
 

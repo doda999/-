@@ -192,7 +192,7 @@ class TreeLoss(nn.Module):
         self.celoss = nn.CrossEntropyLoss(ignore_index=-1)
         self.logger = logging.getLogger("maskrcnn_benchmark").getChild("treeloss")
     def forward(self, input, target):
-        treeloss = torch.zeros([1]).cuda()
+        treeloss = torch.zeros([1])[0].cuda()
         div_n = 0
         for i in range(self.num_tree):
             logits = cat(input[i], dim=0)
