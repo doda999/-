@@ -70,9 +70,9 @@ MODEL:
     #################### Select Relationship Model ####################
     #PREDICTOR: "MotifPredictor"
     #PREDICTOR: "VCTreePredictor"
+    #PREDICTOR: "IMPPredictor"
     #PREDICTOR: "TransformerPredictor"
     # PREDICTOR: "CausalAnalysisPredictor"
-    # PREDICTOR: "HierarchicalCausalPredictor"
     # PREDICTOR: "KnowledgeTransferPredictor"
     PREDICTOR: "PSKTPredictor"
     ################# Parameters for Motif Predictor ##################
@@ -90,20 +90,18 @@ MODEL:
     ############# Parameters for Knowledge Transfer Predictor ##############
     KNOWLEDGETRANS:
       CONTEXT_LAYER: 'motifs'         # candicates: motifs, vctree, vtranse
-      FEAT_MODE: 'concat'           # candidates: concat, sum, basic, vis_concat, ctx_concat
       KNOWLEDGE_TRANSFER: True
+      FEATURE_LOSS_WEIGHT: 1.0
+      INITIAL_FEATURE_PATH: ""
       CALIBRATION_ALPHA: 10.0
-      VIS_RECORD: False
-      FEATURE_LOSS: "margin"
-      # KNOWLEDGE_SOURCE: ("on", "has", "in", "of", "wearing", "near", "with", "above", "holding", "behind", "under", "sitting on", "wears", "standing on", "in front of", "attached to", "at", "hanging from", "over", "for", "riding", "carrying", "eating", "walking on", "playing", "covering", "laying on", "along", "watching", "and", "between", "belonging to", "painted on", "against", "looking at") #if you want to use all predicates' feature, just put ()
     ############# Parameters for Predicate Similarity used Knowledge Transfer Predictor ##############
     PSKT:
       CONTEXT_LAYER: 'motifs'         # candicates: motifs, vctree, vtranse
-      FEAT_MODE: 'concat'           # candidates: concat, sum, basic, vis_concat, ctx_concat
-      TAXONOMY_PATH: "/home/miskai/デスクトップ/related-work/scene-graph-benchmark/SGG-TD2/datasets/vg/cat-base-2cluster.json"
-      CALIBRATION_ALPHA: 10.0
+      TAXONOMY_PATH: ""
       KNOWLEDGE_TRANSFER: True
-      FEATURE_LOSS: "margin"   
+      FEATURE_LOSS_WEIGHT: 1.0
+      INITIAL_FEATURE_PATH: ""
+      CALIBRATION_ALPHA: 10.0
     ############### Parameters for Transformer Predictor ##############
     TRANSFORMER:
       DROPOUT_RATE: 0.1

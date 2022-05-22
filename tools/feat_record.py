@@ -22,9 +22,10 @@ try:
 except ImportError:
     raise ImportError("Use APEX precision via apex.amp.")
 
-def record(model, data_loader, output_folder, device, timer=None, logger=None):
+def record(model, data_loader, predictor, output_folder, device, timer=None, logger=None):
     # save file
-    savefile = os.path.join(output_folder,"vis.npy")
+    savefile = os.path.join(output_folder,"feat.npy")
+    model.roi_heads.relation.predictor.feat = {"avg_feature": np.zeros((model.roi_heads.relation.predictor.num_rel_cls, model.roi_heads.relation.predictor.feat_dim))}
     model.eval()
     cpu_device = torch.device("cpu")
     torch.cuda.empty_cache()
@@ -41,7 +42,7 @@ def record(model, data_loader, output_folder, device, timer=None, logger=None):
                 if not cfg.MODEL.DEVICE == 'cpu':
                     torch.cuda.synchronize()
                 timer.toc()
-    np.save(savefile, model.roi_heads.relation.predictor.vis)
+    np.save(savefile, model.roi_heads.relation.predictor.feat)
     torch.cuda.empty_cache()
     return 
 
@@ -75,9 +76,11 @@ def main():
 
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
+    predictor = cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR
+    cfg.TEST.IMS_PER_BATCH = 1
     cfg.freeze()
 
-    assert cfg.MODEL.ROI_RELATION_HEAD.HIERARCHICAL.VIS_RECORD == True or cfg.MODEL.ROI_RELATION_HEAD.KNOWLEDGETRANS.VIS_RECORD == True
+    assert predictor=="KnowledgeTransferPredictor" 
 
     output_dir = cfg.OUTPUT_DIR
     logger = setup_logger("maskrcnn_benchmark", output_dir, get_rank(), filename="visrecord_log.txt")
@@ -88,6 +91,8 @@ def main():
     logger.info("\n" + collect_env_info())
 
     model = build_detection_model(cfg)
+    model.roi_heads.relation.feat_record = True
+    model.roi_heads.relation.predictor.feat_record = True
     model.to(cfg.MODEL.DEVICE)
 
     # Initialize mixed-precision if necessary
@@ -110,40 +115,37 @@ def main():
     dataset_names = cfg.DATASETS.TRAIN
 
     if cfg.OUTPUT_DIR:
-        for idx, dataset_name in enumerate(dataset_names):
-            output_folder = os.path.join(cfg.OUTPUT_DIR, "vis_record")
-            mkdir(output_folder)
-            output_folders[idx] = output_folder
+        output_folder = os.path.join(cfg.OUTPUT_DIR, "feat_record")
+        mkdir(output_folder)
 
-    data_loaders_train = make_data_loader(cfg, mode="train", is_distributed=distributed)
+    data_loader_train = make_data_loader(cfg, mode="train", is_distributed=distributed, record=True)[0]
 
-    for output_folder, dataset_name, data_loader_train in zip(output_folders, dataset_names, data_loaders_train):
-        device = torch.device("cuda")
-        num_devices = get_world_size()
-        dataset = data_loader_train.dataset
+    device = torch.device("cuda")
+    num_devices = get_world_size()
+    dataset = data_loader_train.dataset
 
-        logger.info("Start recording on {} dataset({} images).".format(dataset_name, len(dataset)))
-        total_timer = Timer()
-        inference_timer = Timer()
-        total_timer.tic()
-        # TODO: need new func
-        record(model, data_loader_train, output_folder, device, timer=inference_timer, logger=logger)
-        synchronize()
-        total_time = total_timer.toc()
-        total_time_str = get_time_str(total_time)
-        logger.info(
-           "Total run time: {} ({} s / img per device, on {} devices)".format(
-            total_time_str, total_time * num_devices / len(dataset), num_devices 
-            )
+    logger.info("Start recording on a dataset({} images).".format(len(dataset)))
+    total_timer = Timer()
+    inference_timer = Timer()
+    total_timer.tic()
+    # TODO: need new func
+    record(model, data_loader_train, predictor, output_folder, device, timer=inference_timer, logger=logger)
+    synchronize()
+    total_time = total_timer.toc()
+    total_time_str = get_time_str(total_time)
+    logger.info(
+        "Total run time: {} ({} s / img per device, on {} devices)".format(
+        total_time_str, total_time * num_devices / len(dataset), num_devices 
         )
-        total_infer_time = get_time_str(inference_timer.total_time)
-        logger.info(
-            "Model inference time: {} ({} s / img per device, on {} devices)".format(
-                total_infer_time,
-                inference_timer.total_time * num_devices / len(dataset),
-                num_devices,
-            )
+    )
+    total_infer_time = get_time_str(inference_timer.total_time)
+    logger.info(
+        "Model inference time: {} ({} s / img per device, on {} devices)".format(
+            total_infer_time,
+            inference_timer.total_time * num_devices / len(dataset),
+            num_devices,
         )
+    )
 
 if __name__ == "__main__":
     main()
