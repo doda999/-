@@ -83,3 +83,5 @@ After training the baseline, run ```sh/record.sh```. In output, ```rel.npy``` is
 ## Evaluation
 To evaluate your model, run ```bash sh/test.sh```. Note that ```MODEL.ROI_RELATION_HEAD.CAUSALPSKT.TAXONOMY_PATH``` should be the same as the taxonomy path you set in training. 
 
+## Acknowledgement
+This repository is created based on the scene graph benchmark codebase by [KaihuaTang](https://github.com/KaihuaTang/Scene-Graph-Benchmark.pytorch).
