@@ -10,7 +10,7 @@ Check [DATASET.md](DATASET.md) for instructions of dataset preprocessing.
 
 ## Pre-Trained Models
 
-Here is the checkpoints of our models on PredCls (batch size 12) / SGDet, SGCls (batch size 4): (Now preparing sharing links...).
+Here is the checkpoints of our models on PredCls (batch size 12) / SGDet, SGCls (batch size 4): [link](https://drive.google.com/drive/folders/1wADFoIaFJEjTq4rfw6vohNsZERQTHL6t?usp=sharing).
 
 Corresponding Results.
 Models | mR@20 | mR@50 | mR@100 | zR@20 | zR@50 | zR@100
